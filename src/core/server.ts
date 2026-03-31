@@ -1,6 +1,8 @@
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { SlackChannel } from "../channels/slack.ts";
 import type { PhantomConfig } from "../config/types.ts";
+import { AuthMiddleware } from "../mcp/auth.ts";
+import { loadMcpConfig } from "../mcp/config.ts";
 import type { PhantomMcpServer } from "../mcp/server.ts";
 import type { MemoryHealth } from "../memory/types.ts";
 import { handleUiRequest } from "../ui/serve.ts";
@@ -67,7 +69,12 @@ export function setTriggerDeps(deps: TriggerDeps): void {
 	triggerDeps = deps;
 }
 
+let triggerAuth: AuthMiddleware | null = null;
+
 export function startServer(config: PhantomConfig, startedAt: number): ReturnType<typeof Bun.serve> {
+	const mcpConfig = loadMcpConfig();
+	triggerAuth = new AuthMiddleware(mcpConfig);
+
 	const server = Bun.serve({
 		port: config.port,
 		async fetch(req) {
@@ -142,6 +149,19 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 }
 
 async function handleTrigger(req: Request): Promise<Response> {
+	if (!triggerAuth) {
+		return Response.json({ status: "error", message: "Auth not initialized" }, { status: 503 });
+	}
+
+	const auth = await triggerAuth.authenticate(req);
+	if (!auth.authenticated) {
+		return Response.json({ status: "error", message: auth.error }, { status: 401 });
+	}
+
+	if (!triggerAuth.hasScope(auth, "operator")) {
+		return Response.json({ status: "error", message: "Insufficient scope: operator required" }, { status: 403 });
+	}
+
 	if (!triggerDeps) {
 		return Response.json({ status: "error", message: "Trigger not configured" }, { status: 503 });
 	}

@@ -43,7 +43,7 @@ export function calculateEpisodeContextScore(episode: Episode): number {
 		decayRate: episode.decay_rate,
 	});
 
-	return weightedAverage2(signals.durability, signals.recency, 0.6, 0.4);
+	return signals.durability * 0.6 + signals.recency * 0.4;
 }
 
 export function shouldIncludeEpisodeInContext(episode: Episode): boolean {
@@ -73,10 +73,6 @@ function getEpisodeSignals(metadata: EpisodeRankingMetadata): { durability: numb
 
 function weightedAverage(a: number, b: number, c: number, aWeight: number, bWeight: number, cWeight: number): number {
 	return a * aWeight + b * bWeight + c * cWeight;
-}
-
-function weightedAverage2(a: number, b: number, aWeight: number, bWeight: number): number {
-	return a * aWeight + b * bWeight;
 }
 
 function exponentialDecay(ageHours: number, halfLifeHours: number, decayRate: number): number {

@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import { applyApproved } from "./application.ts";
@@ -58,7 +59,30 @@ export class EvolutionEngine {
 		const setting = this.config.judges?.enabled ?? "auto";
 		if (setting === "never") return false;
 		if (setting === "always") return true;
-		return !!process.env.ANTHROPIC_API_KEY;
+
+		// auto mode: judges are available whenever any plausible credential path exists.
+		// Evaluated in priority order:
+		//  1. A non-anthropic provider was configured. The operator explicitly opted
+		//     into a non-default backend, so assume they have credentials for it. We
+		//     cannot validate the key here because it lives in an arbitrary env var.
+		//  2. A custom base_url was set on the anthropic provider. Same reasoning: the
+		//     operator pointed us at a specific endpoint on purpose.
+		//  3. ANTHROPIC_API_KEY is set (the legacy default path, preserved verbatim).
+		//  4. ~/.claude/.credentials.json exists. This is the `claude login` path the
+		//     Phase 1 mcheema VM test exercised: no env key, just an OAuth credential
+		//     file that the Agent SDK subprocess reads directly.
+		if (this.runtime) {
+			const provider = this.runtime.getPhantomConfig().provider;
+			if (provider.type !== "anthropic") return true;
+			if (provider.base_url) return true;
+		}
+		if (process.env.ANTHROPIC_API_KEY) return true;
+		// Prefer $HOME so tests can sandbox the credentials lookup. Bun's os.homedir()
+		// reads from getpwuid and ignores in-process mutations to HOME, so falling
+		// back to homedir() only when HOME is unset keeps production behavior correct.
+		const home = process.env.HOME ?? homedir();
+		if (existsSync(join(home, ".claude", ".credentials.json"))) return true;
+		return false;
 	}
 
 	usesLLMJudges(): boolean {

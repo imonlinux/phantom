@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { buildProviderEnv } from "../config/providers.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import { extractTextFromMessage } from "./message-utils.ts";
 
@@ -107,6 +108,12 @@ export async function runJudgeQuery<T>(
 	const schemaJson = z.toJSONSchema(options.schema);
 	const judgePrompt = buildJudgePrompt(options.systemPrompt, schemaJson);
 
+	// Judges must flow through the same provider as the main agent so that
+	// auth, base URL, model mappings, and beta headers are consistent. Without
+	// this, a Z.AI deployment would silently route judges back to Anthropic
+	// whenever ANTHROPIC_API_KEY happened to be set in the shell.
+	const providerEnv = buildProviderEnv(config);
+
 	const queryStream = query({
 		prompt: options.userMessage,
 		options: {
@@ -121,6 +128,7 @@ export async function runJudgeQuery<T>(
 			maxTurns: 1,
 			effort: "low",
 			persistSession: false,
+			env: { ...process.env, ...providerEnv },
 		},
 	});
 

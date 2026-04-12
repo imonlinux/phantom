@@ -1,6 +1,26 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { AgentRuntime } from "../../agent/runtime.ts";
+import { PhantomConfigSchema } from "../../config/schemas.ts";
+import type { PhantomConfig } from "../../config/types.ts";
+import { runMigrations } from "../../db/migrate.ts";
 import { EvolutionEngine } from "../engine.ts";
+
+// Helper: build an AgentRuntime with an in-memory SQLite DB and an optional
+// provider override so judge-activation tests can exercise the real code path
+// without mocking. The runtime is not actually queried; only its config getter
+// is read by resolveJudgeMode().
+function makeRuntime(providerOverride?: unknown): AgentRuntime {
+	const db = new Database(":memory:");
+	db.run("PRAGMA journal_mode = WAL");
+	db.run("PRAGMA foreign_keys = ON");
+	runMigrations(db);
+	const raw: Record<string, unknown> = { name: "test-phantom" };
+	if (providerOverride !== undefined) raw.provider = providerOverride;
+	const config: PhantomConfig = PhantomConfigSchema.parse(raw);
+	return new AgentRuntime(config, db);
+}
 
 const TEST_DIR = "/tmp/phantom-test-judge-activation";
 const CONFIG_PATH = `${TEST_DIR}/config/evolution.yaml`;
@@ -201,5 +221,73 @@ describe("Judge Activation", () => {
 		// No API key + auto = disabled
 		const engine = new EvolutionEngine(CONFIG_PATH);
 		expect(engine.usesLLMJudges()).toBe(false);
+	});
+
+	test("auto mode enables judges when runtime carries a non-anthropic provider", () => {
+		process.env.ANTHROPIC_API_KEY = undefined;
+		setupWithJudgeMode("auto");
+		const runtime = makeRuntime({ type: "zai", api_key_env: "ZAI_API_KEY" });
+		const engine = new EvolutionEngine(CONFIG_PATH, runtime);
+		expect(engine.usesLLMJudges()).toBe(true);
+	});
+
+	test("auto mode enables judges when runtime carries an anthropic provider with a custom base_url", () => {
+		process.env.ANTHROPIC_API_KEY = undefined;
+		setupWithJudgeMode("auto");
+		const runtime = makeRuntime({ type: "anthropic", base_url: "https://proxy.internal/anthropic" });
+		const engine = new EvolutionEngine(CONFIG_PATH, runtime);
+		expect(engine.usesLLMJudges()).toBe(true);
+	});
+
+	test("auto mode still respects ANTHROPIC_API_KEY when runtime provider is plain anthropic", () => {
+		process.env.ANTHROPIC_API_KEY = "sk-test-key";
+		setupWithJudgeMode("auto");
+		const runtime = makeRuntime();
+		const engine = new EvolutionEngine(CONFIG_PATH, runtime);
+		expect(engine.usesLLMJudges()).toBe(true);
+	});
+
+	test("auto mode enables judges when ~/.claude/.credentials.json is present", () => {
+		// Redirect HOME to a sandbox and drop a dummy credentials file. homedir()
+		// resolves through process.env.HOME on Unix, so this is the cleanest way
+		// to exercise the `claude login` path without touching the real home dir.
+		process.env.ANTHROPIC_API_KEY = undefined;
+		const savedHome = process.env.HOME;
+		const fakeHome = `${TEST_DIR}/fake-home`;
+		mkdirSync(`${fakeHome}/.claude`, { recursive: true });
+		writeFileSync(`${fakeHome}/.claude/.credentials.json`, '{"token":"x"}', "utf-8");
+		process.env.HOME = fakeHome;
+		try {
+			setupWithJudgeMode("auto");
+			const runtime = makeRuntime();
+			const engine = new EvolutionEngine(CONFIG_PATH, runtime);
+			expect(engine.usesLLMJudges()).toBe(true);
+		} finally {
+			if (savedHome !== undefined) {
+				process.env.HOME = savedHome;
+			} else {
+				process.env.HOME = undefined;
+			}
+		}
+	});
+
+	test("auto mode disables judges when no provider, no key, and no credentials file exist", () => {
+		process.env.ANTHROPIC_API_KEY = undefined;
+		const savedHome = process.env.HOME;
+		const fakeHome = `${TEST_DIR}/empty-home`;
+		mkdirSync(fakeHome, { recursive: true });
+		process.env.HOME = fakeHome;
+		try {
+			setupWithJudgeMode("auto");
+			const runtime = makeRuntime();
+			const engine = new EvolutionEngine(CONFIG_PATH, runtime);
+			expect(engine.usesLLMJudges()).toBe(false);
+		} finally {
+			if (savedHome !== undefined) {
+				process.env.HOME = savedHome;
+			} else {
+				process.env.HOME = undefined;
+			}
+		}
 	});
 });

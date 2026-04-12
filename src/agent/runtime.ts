@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
+import { buildProviderEnv } from "../config/providers.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolvedConfig } from "../evolution/types.ts";
 import type { MemoryContextBuilder } from "../memory/context-builder.ts";
@@ -60,6 +61,13 @@ export class AgentRuntime {
 
 	getLastTrackedFiles(): string[] {
 		return this.lastTrackedFiles;
+	}
+
+	// Accessor used by EvolutionEngine.resolveJudgeMode() to inspect the provider
+	// config without piercing encapsulation on every other runtime field. Returning
+	// the same reference is fine: PhantomConfig is treated as immutable after load.
+	getPhantomConfig(): PhantomConfig {
+		return this.config;
 	}
 
 	async handleMessage(
@@ -155,6 +163,12 @@ export class AgentRuntime {
 		let cost: AgentCost = emptyCost();
 		let emittedThinking = false;
 
+		// Provider env is computed per call so operators can hot-swap provider
+		// config between queries without restarting the process. The map is merged
+		// on top of process.env so provider-specific overrides win, and everything
+		// else (PATH, HOME, credential files) is inherited intact.
+		const providerEnv = buildProviderEnv(this.config);
+
 		const runSdkQuery = async (useResume: boolean): Promise<void> => {
 			const queryStream = query({
 				prompt: text,
@@ -172,6 +186,7 @@ export class AgentRuntime {
 					effort: this.config.effort,
 					...(this.config.max_budget_usd > 0 ? { maxBudgetUsd: this.config.max_budget_usd } : {}),
 					abortController: controller,
+					env: { ...process.env, ...providerEnv },
 					hooks: {
 						PreToolUse: [commandBlocker],
 						PostToolUse: [fileTracker.hook],

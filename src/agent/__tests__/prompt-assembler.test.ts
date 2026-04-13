@@ -72,3 +72,39 @@ describe("assemblePrompt Docker awareness", () => {
 		expect(prompt).toContain("Security Boundaries");
 	});
 });
+
+describe("assemblePrompt UI vocabulary guidance", () => {
+	test("includes phantom-* vocabulary references", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("phantom-card");
+		expect(prompt).toContain("phantom-stat");
+		expect(prompt).toContain("phantom-table");
+		expect(prompt).toContain("phantom-chat-bubble-user");
+	});
+
+	test("includes Instrument Serif font reference", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("Instrument Serif");
+	});
+
+	test("includes the chart helper reference", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("window.phantomChart");
+	});
+
+	test("includes the self-validate phantom_preview_page guidance", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("phantom_preview_page");
+	});
+
+	test("references the living style guide and base template paths", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("public/_base.html");
+		expect(prompt).toContain("/ui/_components.html");
+	});
+
+	test("references the eight reference example pages", () => {
+		const prompt = assemblePrompt(baseConfig);
+		expect(prompt).toContain("public/_examples/");
+	});
+});

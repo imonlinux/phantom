@@ -52,6 +52,7 @@ import { createSchedulerToolServer } from "./scheduler/tool.ts";
 import { getSecretRequest } from "./secrets/store.ts";
 import { createSecretToolServer } from "./secrets/tools.ts";
 import { createBrowserToolServer } from "./ui/browser-mcp.ts";
+import { setLoginPageAgentName } from "./ui/login-page.ts";
 import { closePreviewResources, createPreviewToolServer, getOrCreatePreviewContext } from "./ui/preview.ts";
 import { setPublicDir, setSecretSavedCallback, setSecretsDb } from "./ui/serve.ts";
 import { createWebUiToolServer } from "./ui/tools.ts";
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
 
 	// Set web UI public directory
 	setPublicDir(resolve(process.cwd(), "public"));
+	setLoginPageAgentName(config.name);
 
 	// Load role system
 	const roleRegistry = createRoleRegistry();
@@ -191,7 +193,7 @@ async function main(): Promise<void> {
 		runtime.setMcpServerFactories({
 			"phantom-dynamic-tools": () => createInProcessToolServer(registry),
 			"phantom-scheduler": () => createSchedulerToolServer(scheduler as Scheduler),
-			"phantom-web-ui": () => createWebUiToolServer(config.public_url),
+			"phantom-web-ui": () => createWebUiToolServer(config.public_url, config.name),
 			"phantom-secrets": () => createSecretToolServer({ db, baseUrl: secretsBaseUrl }),
 			"phantom-preview": () => createPreviewToolServer(config.port),
 			"phantom-browser": () => createBrowserToolServer(() => getOrCreatePreviewContext()),

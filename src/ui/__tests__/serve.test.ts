@@ -29,7 +29,6 @@ describe("login page", () => {
 		const res = await handleUiRequest(req("/ui/login"));
 		expect(res.status).toBe(200);
 		const body = await res.text();
-		expect(body).toContain("Phantom");
 		expect(body).toContain("login-form");
 		expect(body).toContain("Access token");
 	});
@@ -107,7 +106,8 @@ describe("auth required", () => {
 		const res = await handleUiRequest(req("/ui/index.html", { cookie: `phantom_session=${sessionToken}` }));
 		expect(res.status).toBe(200);
 		const body = await res.text();
-		expect(body).toContain("Phantom Web UI");
+		expect(body).toContain("data-agent-name");
+		expect(body).toContain("phantom-nav-brand");
 	});
 });
 
@@ -117,7 +117,8 @@ describe("static file serving", () => {
 		const res = await handleUiRequest(req("/ui/", { cookie: `phantom_session=${sessionToken}` }));
 		expect(res.status).toBe(200);
 		const body = await res.text();
-		expect(body).toContain("Phantom Web UI");
+		expect(body).toContain("data-agent-name");
+		expect(body).toContain("phantom-nav-brand");
 	});
 
 	test("serves _base.html", async () => {

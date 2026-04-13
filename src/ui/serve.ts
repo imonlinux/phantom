@@ -6,18 +6,25 @@ import { consumeMagicLink, createSession, isValidSession } from "./session.ts";
 
 import { secretsExpiredHtml, secretsFormHtml } from "../secrets/form-page.ts";
 import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/store.ts";
+import { handleMemoryFilesApi } from "./api/memory-files.ts";
+import { handleSkillsApi } from "./api/skills.ts";
 
 const COOKIE_NAME = "phantom_session";
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
 
 let publicDir = resolve(process.cwd(), "public");
 let secretsDb: Database | null = null;
+let dashboardDb: Database | null = null;
 
 type SecretSavedCallback = (requestId: string, secretNames: string[]) => Promise<void>;
 let onSecretSaved: SecretSavedCallback | null = null;
 
 export function setSecretsDb(db: Database): void {
 	secretsDb = db;
+}
+
+export function setDashboardDb(db: Database): void {
+	dashboardDb = db;
 }
 
 export function setSecretSavedCallback(fn: SecretSavedCallback): void {
@@ -123,6 +130,23 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 	// SSE endpoint
 	if (url.pathname === "/ui/api/events") {
 		return createSSEResponse();
+	}
+
+	// Dashboard API routes (PR1). Return as soon as one matches so the static
+	// file fallthrough below never sees them.
+	if (url.pathname.startsWith("/ui/api/skills")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleSkillsApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/memory-files")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleMemoryFilesApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
 	}
 
 	// Static files

@@ -1,5 +1,6 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { createReflectiveToolServer } from "./agent/in-process-reflective-tools.ts";
 import { createInProcessToolServer } from "./agent/in-process-tools.ts";
 import { AgentRuntime } from "./agent/runtime.ts";
 import type { RuntimeEvent } from "./agent/runtime.ts";
@@ -54,7 +55,7 @@ import { createSecretToolServer } from "./secrets/tools.ts";
 import { createBrowserToolServer } from "./ui/browser-mcp.ts";
 import { setLoginPageAgentName } from "./ui/login-page.ts";
 import { closePreviewResources, createPreviewToolServer, getOrCreatePreviewContext } from "./ui/preview.ts";
-import { setPublicDir, setSecretSavedCallback, setSecretsDb } from "./ui/serve.ts";
+import { setDashboardDb, setPublicDir, setSecretSavedCallback, setSecretsDb } from "./ui/serve.ts";
 import { createWebUiToolServer } from "./ui/tools.ts";
 
 async function main(): Promise<void> {
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
 	const db = getDatabase();
 	runMigrations(db);
 	setSecretsDb(db);
+	setDashboardDb(db);
 	console.log("[phantom] Database ready");
 
 	// Seed working memory file if it does not exist yet
@@ -193,6 +195,7 @@ async function main(): Promise<void> {
 		runtime.setMcpServerFactories({
 			"phantom-dynamic-tools": () => createInProcessToolServer(registry),
 			"phantom-scheduler": () => createSchedulerToolServer(scheduler as Scheduler),
+			"phantom-reflective": () => createReflectiveToolServer(memory.isReady() ? memory : null, db),
 			"phantom-web-ui": () => createWebUiToolServer(config.public_url, config.name),
 			"phantom-secrets": () => createSecretToolServer({ db, baseUrl: secretsBaseUrl }),
 			"phantom-preview": () => createPreviewToolServer(config.port),
@@ -210,7 +213,7 @@ async function main(): Promise<void> {
 		});
 		const emailStatus = process.env.RESEND_API_KEY ? " + email" : "";
 		console.log(
-			`[mcp] MCP server initialized (dynamic tools + scheduler + web UI + secrets + preview + browser${emailStatus} wired to agent)`,
+			`[mcp] MCP server initialized (dynamic tools + scheduler + reflective + web UI + secrets + preview + browser${emailStatus} wired to agent)`,
 		);
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);

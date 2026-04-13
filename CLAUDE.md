@@ -178,6 +178,39 @@ Full checklist at `docs/deploy-checklist.md`. Both modes are first-class.
 
 Production deployments are managed internally. Do NOT modify production deployments without explicit approval. Code-only updates use rsync with --exclude for config/phantom-config/data.
 
+### Deploy gotchas (read before every Docker redeploy)
+
+Two mistakes that have bitten us in production. Never repeat them.
+
+**1. rsync with trailing slashes merges directories into the target root.** When updating a Docker VM, do NOT pass multiple sources with trailing slashes to a single target:
+
+```bash
+# WRONG: merges contents of src/, public/, scripts/ into the top of /home/specter/phantom/
+rsync -az --delete src/ public/ scripts/ package.json specter@<IP>:/home/specter/phantom/
+```
+
+That command collapses the contents of every source into the target root, and `--delete` then wipes the original `src/`, `public/`, `scripts/` names. Correct form is one rsync per directory with matching source and target paths:
+
+```bash
+rsync -az --delete src/     specter@<IP>:/home/specter/phantom/src/
+rsync -az --delete public/  specter@<IP>:/home/specter/phantom/public/
+rsync -az --delete scripts/ specter@<IP>:/home/specter/phantom/scripts/
+rsync -az package.json bun.lock tsconfig.json biome.json Dockerfile docker-compose.yaml specter@<IP>:/home/specter/phantom/
+```
+
+**2. Alpine overlay into `phantom_public` volume must chown to uid 999.** Phantom inside the container runs as uid 999 (the `phantom` user). The alpine-overlay pattern for updating the `phantom_public` named volume copies files from the host (owned by `specter` at uid 1000) and `cp -av` preserves numeric ownership. The result: the volume and every file in it end up owned by uid 1000, and the phantom container (uid 999) cannot write to `/app/public`. The agent fails silently when asked to create a new page, then flails on `sudo chmod 777` (no sudo in the container) and `cat /etc/group`.
+
+Always bake the chown into the overlay:
+
+```bash
+docker run --rm \
+  -v phantom_phantom_public:/dst \
+  -v /home/specter/phantom/public:/src \
+  alpine sh -c 'cp -av /src/. /dst/ && chown -R 999:999 /dst'
+```
+
+Verify with `docker exec phantom sh -c 'touch /app/public/_w && rm /app/public/_w && echo OK'` before walking away from a deploy. This applies to any volume the phantom container writes to, not just `phantom_public`.
+
 ## Known Bugs
 
 1. **Onboarding re-fires on restart (LOW):** When evolution generation is 0, the intro DM sends again on restart. Needs an "intro_sent" flag in SQLite.

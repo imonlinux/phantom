@@ -232,9 +232,9 @@ The `phantom init --yes` step prints MCP tokens. Save the Admin token. This is u
 }
 ```
 
-## Updating a Deployed Phantom
+## Updating a Deployed Phantom (bare metal)
 
-To deploy new code to an existing VM:
+To deploy new code to an existing bare metal VM:
 
 ```bash
 # Sync latest code (does NOT touch .env.local, data, or config)
@@ -249,6 +249,53 @@ ssh specter@<IP> "cd /home/specter/phantom && pkill -f bun; sleep 2; source .env
 ```
 
 Note: the update rsync excludes config/ and phantom-config/ to preserve the agent's evolved configuration and memory.
+
+## Updating a Deployed Phantom (Docker)
+
+For Docker deployments, rsync the source, rebuild the phantom container, and overlay the updated static files into the `phantom_public` named volume. Two gotchas you must respect.
+
+### Gotcha 1: rsync each directory with matching source and target paths
+
+Do NOT pass multiple sources with trailing slashes to a single target directory. rsync will merge contents into the target root and `--delete` will wipe the original `src/`, `public/`, `scripts/` names. Instead, run one rsync per directory:
+
+```bash
+rsync -az --delete src/     specter@<IP>:/home/specter/phantom/src/
+rsync -az --delete public/  specter@<IP>:/home/specter/phantom/public/
+rsync -az --delete scripts/ specter@<IP>:/home/specter/phantom/scripts/
+rsync -az package.json bun.lock tsconfig.json biome.json Dockerfile docker-compose.yaml \
+  specter@<IP>:/home/specter/phantom/
+```
+
+### Rebuild the phantom container
+
+```bash
+ssh specter@<IP> "cd /home/specter/phantom && docker compose up -d --build phantom"
+```
+
+This rebuilds the image with the new `src/` and `public/` content and restarts the container. Qdrant and Ollama keep running.
+
+### Gotcha 2: overlay the public volume and chown to uid 999
+
+The `phantom_public` named volume mounts over `/app/public` inside the container, so the new `public/` files baked into the image at build time do not reach the running container. You must overlay the volume from the host. And because the phantom container runs as `uid=999(phantom)`, the overlay must chown the volume contents to 999, or phantom cannot write to `/app/public` and every agent attempt to create a new page fails silently with permission denied.
+
+```bash
+ssh specter@<IP> "docker run --rm \
+  -v phantom_phantom_public:/dst \
+  -v /home/specter/phantom/public:/src \
+  alpine sh -c 'cp -av /src/. /dst/ && chown -R 999:999 /dst'"
+```
+
+Why the chown is mandatory: alpine runs as root by default and `cp -av` preserves numeric ownership from the host source. The host files are owned by `specter` at uid 1000. Without the chown, every file in the volume lands at uid 1000, which the phantom container (uid 999) cannot modify.
+
+### Verify
+
+```bash
+# Container can write to /app/public
+ssh specter@<IP> "docker exec phantom sh -c 'touch /app/public/_w && rm /app/public/_w && echo OK'"
+
+# Health endpoint reports the new version
+curl -s https://<name>.ghostwright.dev/health | python3 -m json.tool
+```
 
 ## Deployed Agents Reference
 

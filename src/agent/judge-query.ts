@@ -30,6 +30,34 @@ export type JudgeQueryResult<T> = {
 	durationMs: number;
 };
 
+// Partial cost captured from any pre-result streaming message. Phase 0 safety
+// additions need this so that a subprocess that gets SIGKILLed before emitting
+// its final `result` frame still leaves a visible footprint in metrics. Without
+// this, fork-bomb API spend is invisible to the operator.
+export type JudgePartialCost = {
+	inputTokens: number;
+	outputTokens: number;
+	costUsd: number;
+	model: string;
+	durationMs: number;
+};
+
+/**
+ * Error thrown when the judge subprocess fails before producing a parseable
+ * result. The `partialCost` field carries whatever usage information was
+ * observed on the stream so callers can record the spend even when the
+ * subprocess died mid-flight (SIGKILL, OOM, network timeout, etc.).
+ */
+export class JudgeSubprocessError extends Error {
+	readonly partialCost: JudgePartialCost;
+
+	constructor(message: string, partialCost: JudgePartialCost) {
+		super(message);
+		this.name = "JudgeSubprocessError";
+		this.partialCost = partialCost;
+	}
+}
+
 // Minimum permissive schema shape so we can surface verdict/confidence/reasoning
 // on the envelope when the concrete schema opts into those fields.
 type JudgeEnvelopeFields = {
@@ -137,37 +165,89 @@ export async function runJudgeQuery<T>(
 	let outputTokens = 0;
 	let resultCostUsd = 0;
 	let errored: string | null = null;
+	let gotResult = false;
 
-	for await (const message of queryStream) {
-		switch (message.type) {
-			case "assistant": {
-				const content = extractTextFromMessage(message.message);
-				if (content) responseText = content;
-				break;
-			}
-			case "result": {
-				const msg = message as {
-					subtype: string;
-					result?: string;
-					total_cost_usd?: number;
-					usage?: { input_tokens?: number; output_tokens?: number };
-				};
-				if (msg.subtype === "success" && msg.result) {
-					responseText = msg.result;
+	// Running totals of whatever usage we see on the stream before `result`
+	// arrives. If the subprocess is SIGKILLed mid-flight (the fork-bomb failure
+	// mode), these are the only numbers anyone will ever see for that call.
+	const partial: JudgePartialCost = {
+		inputTokens: 0,
+		outputTokens: 0,
+		costUsd: 0,
+		model: resolvedModel,
+		durationMs: 0,
+	};
+
+	const absorbUsage = (usage: unknown): void => {
+		if (!usage || typeof usage !== "object") return;
+		const u = usage as { input_tokens?: number; output_tokens?: number };
+		if (typeof u.input_tokens === "number") partial.inputTokens += u.input_tokens;
+		if (typeof u.output_tokens === "number") partial.outputTokens += u.output_tokens;
+	};
+
+	try {
+		for await (const message of queryStream) {
+			switch (message.type) {
+				case "assistant": {
+					// Assistant messages carry per-turn usage via the BetaMessage envelope.
+					// We treat any usage field on any pre-result message as signal so the
+					// partial cost survives a subprocess that never emits `result`.
+					const betaMessage = (message as { message?: { usage?: unknown } }).message;
+					if (betaMessage?.usage) absorbUsage(betaMessage.usage);
+					const content = extractTextFromMessage(message.message);
+					if (content) responseText = content;
+					break;
 				}
-				if (msg.subtype !== "success") {
-					errored = msg.subtype;
+				case "result": {
+					const msg = message as {
+						subtype: string;
+						result?: string;
+						total_cost_usd?: number;
+						usage?: { input_tokens?: number; output_tokens?: number };
+					};
+					if (msg.subtype === "success" && msg.result) {
+						responseText = msg.result;
+					}
+					if (msg.subtype !== "success") {
+						errored = msg.subtype;
+					}
+					inputTokens = msg.usage?.input_tokens ?? 0;
+					outputTokens = msg.usage?.output_tokens ?? 0;
+					resultCostUsd = msg.total_cost_usd ?? 0;
+					gotResult = true;
+					break;
 				}
-				inputTokens = msg.usage?.input_tokens ?? 0;
-				outputTokens = msg.usage?.output_tokens ?? 0;
-				resultCostUsd = msg.total_cost_usd ?? 0;
-				break;
+				default: {
+					// Some non-assistant/non-result messages (system, task_*) also carry
+					// usage. Absorb anything we can see so partial cost is as accurate as
+					// possible without coupling to a specific subtype.
+					const anyMsg = message as { usage?: unknown };
+					if (anyMsg.usage) absorbUsage(anyMsg.usage);
+					break;
+				}
 			}
 		}
+	} catch (err: unknown) {
+		partial.durationMs = Date.now() - startTime;
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new JudgeSubprocessError(`Judge subprocess stream failed: ${msg}`, partial);
+	}
+
+	if (!gotResult) {
+		// Stream ended without a `result` frame at all. SIGKILL, process exit,
+		// or transport close. Partial cost is the best we have.
+		partial.durationMs = Date.now() - startTime;
+		throw new JudgeSubprocessError("Judge subprocess ended before emitting result", partial);
 	}
 
 	if (errored) {
-		throw new Error(`Judge subprocess ended with ${errored}`);
+		partial.durationMs = Date.now() - startTime;
+		// Prefer the `result` frame numbers when we actually got one, since the
+		// SDK reports cumulative totals in that frame.
+		partial.inputTokens = inputTokens || partial.inputTokens;
+		partial.outputTokens = outputTokens || partial.outputTokens;
+		partial.costUsd = resultCostUsd || partial.costUsd;
+		throw new JudgeSubprocessError(`Judge subprocess ended with ${errored}`, partial);
 	}
 
 	const parsed = parseJsonFromResponse<T>(responseText, options.schema);

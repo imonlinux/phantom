@@ -25,7 +25,7 @@ import {
 	generateDeltas,
 } from "./reflection.ts";
 import type { EvolutionResult, EvolutionVersion, EvolvedConfig, GoldenCase, SessionSummary } from "./types.ts";
-import { validateAll, validateAllWithJudges } from "./validation.ts";
+import { CycleAborted, validateAll, validateAllWithJudges } from "./validation.ts";
 import { getHistory, readVersion, rollback as versionRollback } from "./versioning.ts";
 
 export class EvolutionEngine {
@@ -35,6 +35,21 @@ export class EvolutionEngine {
 	private dailyCostUsd = 0;
 	private dailyCostResetDate = "";
 	private runtime: AgentRuntime | null;
+
+	// Phase 0 safety floor: process-wide mutex around the evolution pipeline.
+	//
+	// The engine is called after every agent turn and every feedback event via
+	// two unawaited `.then/.catch` chains in src/index.ts. An 8-turn session
+	// can fire 5+ overlapping cycles before the first one finishes, and each
+	// cycle spawns dozens of judge subprocesses. In an 8 GB cgroup that is the
+	// shape of the 2026-04-14 fork-bomb.
+	//
+	// A single promise guard is sufficient: if an evolution cycle is in flight
+	// when `afterSession` is called, we log and return a skipped result. We
+	// drop the session rather than queue it, because Phase 2 will replace the
+	// drop-on-floor semantics with a real cadence-backed queue. Phase 0's job
+	// is to keep the process alive, not to guarantee every session triggers.
+	private activeCycle: Promise<EvolutionResult> | null = null;
 
 	// `runtime` is optional so existing tests and heuristic-only deployments can
 	// construct an engine without wiring a full AgentRuntime. When the engine
@@ -105,12 +120,48 @@ export class EvolutionEngine {
 	}
 
 	/**
+	 * Returns a skipped-cycle result. Used when the mutex blocks a new cycle
+	 * or when the cycle is aborted by the judge failure ceiling. Keeps the
+	 * shape identical to a normal early return so callers do not need to
+	 * special-case skipped cycles.
+	 */
+	private skippedResult(): EvolutionResult {
+		return { version: this.getCurrentVersion(), changes_applied: [], changes_rejected: [] };
+	}
+
+	/**
 	 * Main entry point: run the full 6-step evolution pipeline after a session.
 	 * When useLLMJudges is true, uses Sonnet-powered judges for observation
 	 * extraction, safety gate, constitution gate, regression gate, and quality
 	 * assessment. Falls back to heuristics on LLM failure.
+	 *
+	 * Phase 0 safety floor: calls that arrive while another cycle is in
+	 * flight return immediately with a skipped result and no judge
+	 * subprocesses spawned. Phase 2 will replace this drop-on-floor behavior
+	 * with a real cadence queue.
 	 */
 	async afterSession(session: SessionSummary): Promise<EvolutionResult> {
+		if (this.activeCycle !== null) {
+			console.log(
+				`[evolution] cycle already in progress, skipping session ${session.session_id} ` +
+					`(session_key=${session.session_key})`,
+			);
+			return this.skippedResult();
+		}
+
+		const cyclePromise = this.runCycle(session);
+		this.activeCycle = cyclePromise;
+		try {
+			return await cyclePromise;
+		} finally {
+			// Always clear the guard, even when the cycle threw. Without this a
+			// single uncaught throw would permanently wedge the engine and no
+			// further sessions would ever evolve.
+			this.activeCycle = null;
+		}
+	}
+
+	private async runCycle(session: SessionSummary): Promise<EvolutionResult> {
 		const startTime = Date.now();
 		const judgeCosts = emptyJudgeCosts();
 
@@ -154,17 +205,37 @@ export class EvolutionEngine {
 		let validationResults: import("./types.ts").ValidationResult[];
 
 		if (this.llmJudgesEnabled && this.runtime && !this.isDailyCostCapReached()) {
-			const judgeResult = await validateAllWithJudges(
-				this.runtime,
-				deltas,
-				this.checker,
-				goldenSuite,
-				this.config,
-				currentConfig,
-			);
-			validationResults = judgeResult.results;
-			mergeCosts(judgeCosts, judgeResult.judgeCosts);
-			this.incrementDailyCost(totalCostFromJudgeCosts(judgeResult.judgeCosts));
+			try {
+				const judgeResult = await validateAllWithJudges(
+					this.runtime,
+					deltas,
+					this.checker,
+					goldenSuite,
+					this.config,
+					currentConfig,
+				);
+				validationResults = judgeResult.results;
+				mergeCosts(judgeCosts, judgeResult.judgeCosts);
+				this.incrementDailyCost(totalCostFromJudgeCosts(judgeResult.judgeCosts));
+			} catch (error: unknown) {
+				if (error instanceof CycleAborted) {
+					// Phase 0 safety floor: the failure ceiling was hit. Drop the
+					// remaining deltas and exit the cycle cleanly. Record whatever
+					// partial judge costs we did spend so the operator can see the
+					// SIGKILL-era dead spend in metrics.json.
+					console.warn(
+						`[evolution] cycle aborted after ${error.failureCount} judge failures, ` +
+							`dropping ${error.deltasDropped} remaining deltas (session=${session.session_id})`,
+					);
+					mergeCosts(judgeCosts, error.partialJudgeCosts);
+					this.incrementDailyCost(totalCostFromJudgeCosts(error.partialJudgeCosts));
+					if (this.llmJudgesEnabled) {
+						this.recordJudgeCosts(judgeCosts);
+					}
+					return this.skippedResult();
+				}
+				throw error;
+			}
 		} else {
 			validationResults = validateAll(deltas, this.checker, goldenSuite, this.config);
 		}

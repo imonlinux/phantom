@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { JudgeSubprocessError } from "../agent/judge-query.ts";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { EvolutionConfig } from "./config.ts";
 import type { ConstitutionChecker } from "./constitution.ts";
@@ -9,6 +10,53 @@ import { runSafetyJudge } from "./judges/safety-judge.ts";
 import type { JudgeCosts } from "./judges/types.ts";
 import { emptyJudgeCosts } from "./judges/types.ts";
 import type { ConfigDelta, EvolvedConfig, GateResult, GoldenCase, ValidationResult } from "./types.ts";
+
+/**
+ * Thrown by `validateAllWithJudges` when the failure ceiling is reached inside
+ * a single cycle. When more than `MAX_JUDGE_FAILURES_PER_CYCLE` judge
+ * subprocess errors occur during validation of a delta list, the remaining
+ * deltas are dropped and the engine aborts the cycle rather than stacking more
+ * subprocess calls on top of a clearly unhealthy environment. Phase 0 safety
+ * floor: this is how we prevent the OOM fork-bomb from compounding once the
+ * first judge subprocess has already died.
+ */
+export class CycleAborted extends Error {
+	readonly failureCount: number;
+	readonly deltasProcessed: number;
+	readonly deltasDropped: number;
+	readonly partialResults: ValidationResult[];
+	readonly partialJudgeCosts: JudgeCosts;
+
+	constructor(args: {
+		failureCount: number;
+		deltasProcessed: number;
+		deltasDropped: number;
+		partialResults: ValidationResult[];
+		partialJudgeCosts: JudgeCosts;
+	}) {
+		super(
+			`Cycle aborted after ${args.failureCount} judge failures; ` +
+				`${args.deltasProcessed} deltas processed, ${args.deltasDropped} deltas dropped`,
+		);
+		this.name = "CycleAborted";
+		this.failureCount = args.failureCount;
+		this.deltasProcessed = args.deltasProcessed;
+		this.deltasDropped = args.deltasDropped;
+		this.partialResults = args.partialResults;
+		this.partialJudgeCosts = args.partialJudgeCosts;
+	}
+}
+
+/**
+ * Maximum number of judge subprocess failures tolerated inside a single
+ * validation cycle. The second failure triggers `CycleAborted`. Rationale:
+ * the first failure can be transient (network blip, single bad response),
+ * but a second failure in the same cycle is a strong signal that the
+ * environment is unhealthy (memory pressure, rate limit, provider outage)
+ * and continuing to spawn subprocesses is how the Apr 14 2026 fork-bomb
+ * escalated from one bad session to 46 concurrent judge subprocesses.
+ */
+export const MAX_JUDGE_FAILURES_PER_CYCLE = 2;
 
 /**
  * Gate 1: Constitution Gate
@@ -267,8 +315,25 @@ export async function validateAllWithJudges(
 	const configText = buildConfigText(currentConfig);
 
 	const results: ValidationResult[] = [];
+	let failureCount = 0;
 
-	for (const delta of deltas) {
+	const recordJudgeFailure = (error: unknown): string => {
+		failureCount++;
+		const msg = error instanceof Error ? error.message : String(error);
+		// Log partial cost separately so fork-bomb-era SIGKILL spend is visible
+		// in the process log even if it never lands in metrics.json.
+		if (error instanceof JudgeSubprocessError) {
+			const p = error.partialCost;
+			console.warn(
+				`[evolution] judge subprocess died mid-flight: ${msg} ` +
+					`(partial: in=${p.inputTokens} out=${p.outputTokens} cost=$${p.costUsd.toFixed(4)} model=${p.model})`,
+			);
+		}
+		return msg;
+	};
+
+	for (let i = 0; i < deltas.length; i++) {
+		const delta = deltas[i];
 		const gates: GateResult[] = [];
 
 		// Gate 1: Constitution - triple Sonnet with minority veto (fail-closed)
@@ -287,9 +352,18 @@ export async function validateAllWithJudges(
 			}
 		} catch (error: unknown) {
 			// Fail-closed: reject on error
-			const msg = error instanceof Error ? error.message : String(error);
+			const msg = recordJudgeFailure(error);
 			console.warn(`[evolution] Constitution judge failed, failing closed: ${msg}`);
 			gates.push({ gate: "constitution", passed: false, reason: `Judge error (fail-closed): ${msg}` });
+			if (failureCount >= MAX_JUDGE_FAILURES_PER_CYCLE) {
+				throw new CycleAborted({
+					failureCount,
+					deltasProcessed: i,
+					deltasDropped: deltas.length - i,
+					partialResults: results,
+					partialJudgeCosts: judgeCosts,
+				});
+			}
 		}
 
 		// Gate 2: Regression - cascaded Haiku -> Sonnet (fallback to heuristic)
@@ -303,9 +377,18 @@ export async function validateAllWithJudges(
 			judgeCosts.regression_gate.calls++;
 			judgeCosts.regression_gate.totalUsd += regressionResult.costUsd;
 		} catch (error: unknown) {
-			const msg = error instanceof Error ? error.message : String(error);
+			const msg = recordJudgeFailure(error);
 			console.warn(`[evolution] Regression judge failed, falling back to heuristic: ${msg}`);
 			gates.push(regressionGate(delta, goldenSuite));
+			if (failureCount >= MAX_JUDGE_FAILURES_PER_CYCLE) {
+				throw new CycleAborted({
+					failureCount,
+					deltasProcessed: i,
+					deltasDropped: deltas.length - i,
+					partialResults: results,
+					partialJudgeCosts: judgeCosts,
+				});
+			}
 		}
 
 		// Gate 3: Size - stays deterministic
@@ -330,9 +413,20 @@ export async function validateAllWithJudges(
 			}
 		} catch (error: unknown) {
 			// Fail-closed: reject on error
-			const msg = error instanceof Error ? error.message : String(error);
+			const msg = recordJudgeFailure(error);
 			console.warn(`[evolution] Safety judge failed, failing closed: ${msg}`);
 			gates.push({ gate: "safety", passed: false, reason: `Judge error (fail-closed): ${msg}` });
+			if (failureCount >= MAX_JUDGE_FAILURES_PER_CYCLE) {
+				const approved = gates.every((g) => g.passed);
+				results.push({ delta, gates, approved });
+				throw new CycleAborted({
+					failureCount,
+					deltasProcessed: i + 1,
+					deltasDropped: deltas.length - (i + 1),
+					partialResults: results,
+					partialJudgeCosts: judgeCosts,
+				});
+			}
 		}
 
 		const approved = gates.every((g) => g.passed);

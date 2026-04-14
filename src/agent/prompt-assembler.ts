@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolvedConfig } from "../evolution/types.ts";
 import type { RoleTemplate } from "../roles/types.ts";
+import { buildAgentMemoryInstructions } from "./prompt-blocks/agent-memory-instructions.ts";
 import { buildDashboardAwarenessLines } from "./prompt-blocks/dashboard-awareness.ts";
 import { buildEvolvedSections } from "./prompt-blocks/evolved.ts";
 import { buildInstructions } from "./prompt-blocks/instructions.ts";
@@ -48,6 +49,15 @@ export function assemblePrompt(
 			sections.push(evolved);
 		}
 	}
+
+	// 6b. Agent memory instructions: teach the agent to append its own
+	// learnings to phantom-config/memory/agent-notes.md via Write/Edit. Sits
+	// after the evolved config so the block can reference "the sections
+	// above" when explaining what not to duplicate. The file itself is NOT
+	// injected here on purpose; the agent reads its own writes with the Read
+	// tool when it needs them, which avoids a feedback loop that would re-
+	// present the agent's own past entries as canonical context on every query.
+	sections.push(buildAgentMemoryInstructions());
 
 	// 7. Instructions - how you work
 	sections.push(buildInstructions());

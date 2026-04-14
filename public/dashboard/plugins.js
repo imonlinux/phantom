@@ -506,5 +506,39 @@
 		return loadCatalog(false);
 	}
 
+	// Live install snapshot hook. Called by dashboard.js whenever the agent's
+	// SDK init message reports the enabled-plugin set for a freshly-kicked
+	// query. We flip any card whose key is in the snapshot (and is not already
+	// marked installed) to "installed" and surface a gentle toast.
+	function onInitSnapshot(payload) {
+		if (!payload || !Array.isArray(payload.keys) || payload.keys.length === 0) return;
+		if (!state.catalog || !Array.isArray(state.catalog.plugins)) return;
+		var seen = {};
+		for (var i = 0; i < payload.keys.length; i++) {
+			seen[payload.keys[i]] = true;
+		}
+		var flipped = [];
+		state.catalog.plugins.forEach(function (p) {
+			if (seen[p.key] && !p.enabled) {
+				p.enabled = true;
+				flipped.push(p.name || p.key);
+			}
+		});
+		if (flipped.length > 0) {
+			// Re-render if we are currently mounted (root has content).
+			if (root && root.getAttribute("data-active") === "true") {
+				render();
+			}
+			if (ctx && ctx.toast) {
+				if (flipped.length === 1) {
+					ctx.toast("success", "Plugin live", flipped[0] + " is now active.");
+				} else {
+					ctx.toast("success", "Plugins live", flipped.length + " plugins are now active.");
+				}
+			}
+		}
+	}
+
 	window.PhantomDashboard.registerRoute("plugins", { mount: mount });
+	window.PhantomPluginsModule = { onInitSnapshot: onInitSnapshot };
 })();

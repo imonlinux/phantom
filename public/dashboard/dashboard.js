@@ -304,9 +304,34 @@
 		if (el) el.textContent = new Date().toISOString().split("T")[0];
 	}
 
+	// Server-sent events for live dashboard updates. PR3 adds a
+	// "plugin_init_snapshot" event that fires when the agent sees the SDK init
+	// message and resolves the enabled-plugin set. The plugins module flips
+	// optimistically-installed cards to their real state.
+	function openEventStream() {
+		if (!window.EventSource) return null;
+		try {
+			var es = new EventSource("/ui/api/events");
+			es.addEventListener("plugin_init_snapshot", function (e) {
+				try {
+					var data = JSON.parse(e.data);
+					if (window.PhantomPluginsModule && typeof window.PhantomPluginsModule.onInitSnapshot === "function") {
+						window.PhantomPluginsModule.onInitSnapshot(data);
+					}
+				} catch (_) {
+					// SSE payload was malformed; nothing useful to show the user.
+				}
+			});
+			return es;
+		} catch (_) {
+			return null;
+		}
+	}
+
 	function init() {
 		setNavDate();
 		initThemeToggle();
+		openEventStream();
 
 		window.addEventListener("beforeunload", function (e) {
 			if (anyDirty()) {

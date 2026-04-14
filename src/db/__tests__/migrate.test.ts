@@ -35,10 +35,10 @@ describe("runMigrations", () => {
 		runMigrations(db);
 
 		const migrationCount = db.query("SELECT COUNT(*) as count FROM _migrations").get() as { count: number };
-		// PR3 adds a subagent_audit_log table and index (commit 3). The hooks
-		// and settings audit tables land in commits 4 and 5 and bump this count
-		// further.
-		expect(migrationCount.count).toBe(18);
+		// PR3 adds three audit tables and their indices: subagent_audit_log
+		// (commit 3), hook_audit_log (commit 4), and settings_audit_log
+		// (commit 5). Each adds 2 migration steps (table + index).
+		expect(migrationCount.count).toBe(20);
 	});
 
 	test("tracks applied migration indices", () => {
@@ -50,6 +50,8 @@ describe("runMigrations", () => {
 			.all()
 			.map((r) => (r as { index_num: number }).index_num);
 
-		expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+		expect(indices).toEqual([
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+		]);
 	});
 });

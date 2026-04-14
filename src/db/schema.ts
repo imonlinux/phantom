@@ -167,4 +167,23 @@ export const MIGRATIONS: string[] = [
 	)`,
 
 	"CREATE INDEX IF NOT EXISTS idx_subagent_audit_log_name ON subagent_audit_log(subagent_name, id DESC)",
+
+	// PR3 dashboard: hooks editor audit log. Captures every install, update,
+	// uninstall, and first-install trust acceptance via the UI API. Each row
+	// stores the full previous and new hooks slice as JSON so a human can
+	// diff and recover. Agent-originated Write tool edits bypass this path.
+	`CREATE TABLE IF NOT EXISTS hook_audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event TEXT NOT NULL,
+		matcher TEXT,
+		hook_type TEXT,
+		action TEXT NOT NULL,
+		previous_slice TEXT,
+		new_slice TEXT,
+		definition_json TEXT,
+		actor TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+
+	"CREATE INDEX IF NOT EXISTS idx_hook_audit_log_created ON hook_audit_log(id DESC)",
 ];

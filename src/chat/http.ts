@@ -53,6 +53,11 @@ export function createChatHandler(deps: ChatHandlerDeps): (req: Request) => Prom
 			if (response) return response;
 		}
 
+		// Serve manifest and favicon without auth (browsers fetch these without credentials)
+		if (path === "/chat/manifest.webmanifest" || path === "/chat/favicon.svg") {
+			return handleChatStaticRequest(req);
+		}
+
 		if (!isAuthenticated(req)) {
 			const accept = req.headers.get("Accept") ?? "";
 			if (accept.includes("text/html")) {

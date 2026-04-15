@@ -163,7 +163,13 @@ function messageRowToChatMessage(
   }> = [];
   try {
     const parsed = JSON.parse(row.content_json);
-    contentBlocks = Array.isArray(parsed) ? parsed : [parsed];
+    if (typeof parsed === "string") {
+      contentBlocks = [{ type: "text", text: parsed }];
+    } else if (Array.isArray(parsed)) {
+      contentBlocks = parsed;
+    } else {
+      contentBlocks = [parsed];
+    }
   } catch {
     contentBlocks = [{ type: "text", text: row.content_json }];
   }

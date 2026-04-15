@@ -162,7 +162,7 @@ function registerPhantomMetrics(server: McpServer, deps: ToolDependencies): void
 				totalCost: +(costRow?.total ?? 0).toFixed(4),
 				evolutionGeneration: deps.evolution?.getCurrentVersion() ?? 0,
 				evolutionCount: metrics?.evolution_count ?? 0,
-				rollbackCount: metrics?.rollback_count ?? 0,
+				rollbackCount: 0,
 				correctionRate: metrics ? +(metrics.correction_rate_7d * 100).toFixed(1) : 0,
 				period,
 			};

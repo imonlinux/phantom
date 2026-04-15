@@ -41,7 +41,7 @@ import { PeerHealthMonitor } from "./mcp/peer-health.ts";
 import { PeerManager } from "./mcp/peers.ts";
 import { PhantomMcpServer } from "./mcp/server.ts";
 import { loadMemoryConfig } from "./memory/config.ts";
-import { type SessionData, consolidateSession, consolidateSessionWithLLM } from "./memory/consolidation.ts";
+import { type SessionData, consolidateSession } from "./memory/consolidation.ts";
 import { MemoryContextBuilder } from "./memory/context-builder.ts";
 import { MemorySystem } from "./memory/system.ts";
 import { isFirstRun, isOnboardingInProgress } from "./onboarding/detection.ts";
@@ -535,41 +535,25 @@ async function main(): Promise<void> {
 				outcome: response.text.startsWith("Error:") ? "failure" : "success",
 			};
 
-			const useLLMConsolidation = evolution?.usesLLMJudges() && evolution.isWithinCostCap();
-			if (useLLMConsolidation) {
-				const evolvedConfig = evolution?.getConfig();
-				const existingFacts = evolvedConfig ? `${evolvedConfig.userProfile}\n${evolvedConfig.domainKnowledge}` : "";
-				consolidateSessionWithLLM(runtime, memory, sessionData, existingFacts)
-					.then(({ result, judgeCost }) => {
-						if (judgeCost) {
-							evolution?.trackExternalJudgeCost(judgeCost);
-						}
-						if (result.episodesCreated > 0 || result.factsExtracted > 0) {
-							console.log(
-								`[memory] Consolidated (LLM): ${result.episodesCreated} episodes, ` +
-									`${result.factsExtracted} facts (${result.durationMs}ms)`,
-							);
-						}
-					})
-					.catch((err: unknown) => {
-						const errMsg = err instanceof Error ? err.message : String(err);
-						console.warn(`[memory] LLM consolidation failed: ${errMsg}`);
-					});
-			} else {
-				consolidateSession(memory, sessionData)
-					.then((result) => {
-						if (result.episodesCreated > 0 || result.factsExtracted > 0) {
-							console.log(
-								`[memory] Consolidated: ${result.episodesCreated} episodes, ` +
-									`${result.factsExtracted} facts (${result.durationMs}ms)`,
-							);
-						}
-					})
-					.catch((err: unknown) => {
-						const errMsg = err instanceof Error ? err.message : String(err);
-						console.warn(`[memory] Consolidation failed: ${errMsg}`);
-					});
-			}
+			// Phase 3 simplified memory consolidation: the Phase 1+2 LLM judge
+			// path is gone with the rest of the judges directory. Heuristic
+			// extraction ships every session regardless. The reflection
+			// subprocess manages `phantom-config/` memory files on the
+			// cadence, which is the new learning loop; memory/consolidation
+			// here is only the vector-memory episode/fact extractor.
+			consolidateSession(memory, sessionData)
+				.then((result) => {
+					if (result.episodesCreated > 0 || result.factsExtracted > 0) {
+						console.log(
+							`[memory] Consolidated: ${result.episodesCreated} episodes, ` +
+								`${result.factsExtracted} facts (${result.durationMs}ms)`,
+						);
+					}
+				})
+				.catch((err: unknown) => {
+					const errMsg = err instanceof Error ? err.message : String(err);
+					console.warn(`[memory] Consolidation failed: ${errMsg}`);
+				});
 		}
 
 		// Evolution pipeline (non-blocking)

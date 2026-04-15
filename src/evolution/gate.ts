@@ -3,10 +3,9 @@ import { dirname, join } from "node:path";
 import { JudgeSubprocessError } from "../agent/judge-query.ts";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { EvolutionConfig } from "./config.ts";
+import { GateJudgeResult, type GateJudgeResultType, gateJudgePrompt } from "./gate-prompt.ts";
 import type { GateDecision } from "./gate-types.ts";
-import { gateJudgePrompt } from "./judges/prompts.ts";
-import { GateJudgeResult, type GateJudgeResultType } from "./judges/schemas.ts";
-import { JUDGE_MODEL_HAIKU } from "./judges/types.ts";
+import { JUDGE_MODEL_HAIKU } from "./judge-models.ts";
 import type { SessionSummary } from "./types.ts";
 
 // Phase 1 conditional firing gate.

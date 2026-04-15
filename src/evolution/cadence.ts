@@ -166,26 +166,40 @@ export class EvolutionCadence {
 		);
 		const result = await processBatch(queued, this.engine);
 
-		// Only delete rows whose pipeline succeeded. Failed rows stay in the
-		// queue so the next drain retries them; deleting on failure would
-		// silently drop the exact sessions the safety floor exists to protect
-		// (transient judge subprocess errors, network blips, CycleAborted from
-		// the Phase 0 failure ceiling). A future PR will add a `failure_count`
-		// column and a poison-pill ceiling so a single bad row cannot loop
-		// forever, but the dedup-by-session_key on enqueue already bounds the
-		// loss for repeated sessions.
+		// Phase 3 queue disposition:
+		//  - ok rows: delete from queue (markProcessed).
+		//  - invariant hard fail rows: increment retry_count via markFailed,
+		//    which graduates them to the poison pile at count >= 3.
+		//  - transient failure rows (crash, timeout, exception): leave in
+		//    place so the next drain retries them without a retry bump.
 		const okIds: number[] = [];
+		const failedIds: number[] = [];
+		const failedReasons: Record<number, string> = {};
 		for (const entry of result.results) {
 			if (entry.ok) {
 				okIds.push(entry.id);
+				continue;
+			}
+			if (entry.invariantFailed) {
+				failedIds.push(entry.id);
+				failedReasons[entry.id] = entry.error;
 			} else {
-				console.warn(`[evolution] queue row id=${entry.id} pipeline failed, leaving in queue: ${entry.error}`);
+				console.warn(`[evolution] queue row id=${entry.id} transient failure, leaving in queue: ${entry.error}`);
 			}
 		}
 		this.queue.markProcessed(okIds);
+		if (failedIds.length > 0) {
+			const disposition = this.queue.markFailed(failedIds, failedReasons);
+			if (disposition.poisoned.length > 0) {
+				console.warn(`[evolution] rows poisoned after retry ceiling: ${disposition.poisoned.join(",")}`);
+			}
+			if (disposition.retried.length > 0) {
+				console.warn(`[evolution] rows left in queue with incremented retry_count: ${disposition.retried.join(",")}`);
+			}
+		}
 
 		const appliedCount = result.results.reduce((sum, r) => {
-			if (r.ok) return sum + r.result.changes_applied.length;
+			if (r.ok) return sum + r.result.changes.length;
 			return sum;
 		}, 0);
 		console.log(

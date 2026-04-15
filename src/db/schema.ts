@@ -225,4 +225,23 @@ export const MIGRATIONS: string[] = [
 	)`,
 
 	"CREATE INDEX IF NOT EXISTS idx_evolution_queue_enqueued_at ON evolution_queue(enqueued_at)",
+
+	// Phase 3 evolution pipeline: bounded retry path for invariant hard
+	// failures on the reflection subprocess. Rows are retried up to three
+	// times before being moved to `evolution_queue_poison` for manual
+	// inspection. Transient crashes (SIGKILL, timeout) do NOT increment
+	// retry_count because those are infrastructure issues, not content
+	// issues. This is the deliberate asymmetry from the Phase 3 brief.
+	"ALTER TABLE evolution_queue ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+
+	`CREATE TABLE IF NOT EXISTS evolution_queue_poison (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		session_key TEXT NOT NULL,
+		gate_decision_json TEXT NOT NULL,
+		session_summary_json TEXT NOT NULL,
+		original_enqueued_at TEXT NOT NULL,
+		poisoned_at TEXT NOT NULL DEFAULT (datetime('now')),
+		failure_reason TEXT
+	)`,
 ];

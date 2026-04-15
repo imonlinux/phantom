@@ -19,6 +19,19 @@ services:
       # Override memory URLs to use Docker service names
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_URL=http://ollama:11434
+    # Cap the total number of processes this service can create. A runaway
+    # evolution subprocess spawn loop is bounded here in addition to the
+    # Phase 0 application-layer mutex and the Phase 2 cadence.
+    pids_limit: 256
+    # Bias the host OOM killer toward qdrant/ollama under memory pressure so
+    # the main phantom process stays alive and can log the squeeze before it
+    # is killed last.
+    oom_score_adj: -500
+    # Give phantom twice the default CPU share under cgroup contention so
+    # the reflection subprocess and the live agent do not starve when
+    # qdrant/ollama are also busy. No cpu.max quota is set because the
+    # current no-throttle behavior is correct.
+    cpu_shares: 2048
     # Non-root: Claude Code CLI refuses --dangerously-skip-permissions as root.
     # Docker socket access is granted via group_add with the host's docker GID.
     # Override DOCKER_GID in .env if your host's docker group has a different ID

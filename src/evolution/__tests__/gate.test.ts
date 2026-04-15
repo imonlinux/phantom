@@ -25,17 +25,13 @@ function setupEnv(): EvolutionConfig {
 	mkdirSync(`${TEST_DIR}/phantom-config/meta`, { recursive: true });
 	writeFileSync(`${TEST_DIR}/phantom-config/meta/metrics.json`, "{}", "utf-8");
 	return {
-		cadence: { reflection_interval: 1, consolidation_interval: 10, full_review_interval: 50, drift_check_interval: 20 },
-		gates: { drift_threshold: 0.7, max_file_lines: 200, auto_rollback_threshold: 0.1, auto_rollback_window: 5 },
-		reflection: { model: "claude-sonnet-4-20250514", effort: "high", max_budget_usd: 0.5 },
-		judges: { enabled: "always", cost_cap_usd_per_day: 50.0, max_golden_suite_size: 50 },
+		reflection: { enabled: "always" },
 		paths: {
 			config_dir: `${TEST_DIR}/phantom-config`,
 			constitution: `${TEST_DIR}/phantom-config/constitution.md`,
 			version_file: `${TEST_DIR}/phantom-config/meta/version.json`,
 			metrics_file: `${TEST_DIR}/phantom-config/meta/metrics.json`,
 			evolution_log: `${TEST_DIR}/phantom-config/meta/evolution-log.jsonl`,
-			golden_suite: `${TEST_DIR}/phantom-config/meta/golden-suite.jsonl`,
 			session_log: `${TEST_DIR}/phantom-config/memory/session-log.jsonl`,
 		},
 	};
@@ -259,17 +255,7 @@ describe("engine.enqueueIfWorthy routing", () => {
 		writeFileSync(
 			configPath,
 			[
-				"cadence:",
-				"  reflection_interval: 1",
-				"  consolidation_interval: 10",
-				"gates:",
-				"  drift_threshold: 0.7",
-				"  max_file_lines: 200",
-				"  auto_rollback_threshold: 0.1",
-				"  auto_rollback_window: 5",
 				"reflection:",
-				'  model: "claude-sonnet-4-20250514"',
-				"judges:",
 				'  enabled: "never"',
 				"paths:",
 				`  config_dir: "${config.paths.config_dir}"`,
@@ -277,7 +263,6 @@ describe("engine.enqueueIfWorthy routing", () => {
 				`  version_file: "${config.paths.version_file}"`,
 				`  metrics_file: "${config.paths.metrics_file}"`,
 				`  evolution_log: "${config.paths.evolution_log}"`,
-				`  golden_suite: "${config.paths.golden_suite}"`,
 				`  session_log: "${config.paths.session_log}"`,
 			].join("\n"),
 			"utf-8",
@@ -318,7 +303,6 @@ describe("engine.enqueueIfWorthy routing", () => {
 		};
 
 		const engine = new EvolutionEngine(configPath, runtime as unknown as AgentRuntime);
-		(engine as unknown as { llmJudgesEnabled: boolean }).llmJudgesEnabled = true;
 		const queue = new EvolutionQueue(db);
 		engine.setQueueWiring(queue, () => undefined);
 
@@ -334,11 +318,7 @@ describe("engine.enqueueIfWorthy routing", () => {
 		writeFileSync(
 			configPath,
 			[
-				"cadence:",
-				"  reflection_interval: 1",
-				"gates:",
-				"  max_file_lines: 200",
-				"judges:",
+				"reflection:",
 				'  enabled: "never"',
 				"paths:",
 				`  config_dir: "${config.paths.config_dir}"`,
@@ -346,7 +326,6 @@ describe("engine.enqueueIfWorthy routing", () => {
 				`  version_file: "${config.paths.version_file}"`,
 				`  metrics_file: "${config.paths.metrics_file}"`,
 				`  evolution_log: "${config.paths.evolution_log}"`,
-				`  golden_suite: "${config.paths.golden_suite}"`,
 				`  session_log: "${config.paths.session_log}"`,
 			].join("\n"),
 			"utf-8",
@@ -387,7 +366,6 @@ describe("engine.enqueueIfWorthy routing", () => {
 		};
 
 		const engine = new EvolutionEngine(configPath, runtime as unknown as AgentRuntime);
-		(engine as unknown as { llmJudgesEnabled: boolean }).llmJudgesEnabled = true;
 		const queue = new EvolutionQueue(db);
 		engine.setQueueWiring(queue, () => undefined);
 

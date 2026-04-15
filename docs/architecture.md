@@ -94,15 +94,13 @@ Embeddings via Ollama (nomic-embed-text, 768d vectors). Hybrid search using dens
 
 ### Self-Evolution Engine
 
-`src/evolution/engine.ts` - 6-step pipeline that runs after each session:
-1. **Observation Extraction** - identify corrections, preferences, domain facts
-2. **Self-Critique** - review session against current config
-3. **Config Delta Generation** - propose minimal config changes
-4. **5-Gate Validation** - constitution, regression, size, drift, safety
-5. **Application** - approved changes written to files, version bumped
-6. **Consolidation** - periodic observation compression and pattern extraction
+`src/evolution/` wraps a three-layer learning loop:
 
-LLM judges (Sonnet) available for gates when API key is set. Falls back to heuristic validation.
+1. **Conditional firing gate** (`gate.ts`) - one Haiku call per session decides fire or skip. Failsafe defaults to fire on any gate error.
+2. **Persistent queue + cadence** (`queue.ts`, `cadence.ts`) - fired sessions live in SQLite until the 180-minute cron or the depth-based demand trigger drains the queue. The cadence `inFlight` guard serializes drains.
+3. **Reflection subprocess** (`reflection-subprocess.ts`) - the Agent SDK spawns a sandboxed memory manager against `phantom-config/`. The agent reads the batch, reads the memory files, and decides what to learn, what to compact, when to skip, and which model tier to run at. TypeScript snapshots, parses the sentinel, runs a nine-invariant byte-compare check, and commits or rolls back.
+
+`constitution.md` is immutable at three layers: SDK deny list, teaching prompt, and post-write byte compare (invariant I2). Retry bound: three invariant failures in a row graduates a queue row to `evolution_queue_poison` for manual review. See `docs/self-evolution.md` for the full invariant list and failure modes.
 
 ### MCP Server
 
@@ -148,7 +146,7 @@ src/
   config/          - YAML config loaders, Zod schemas
   core/            - HTTP server, graceful shutdown
   db/              - SQLite connection, migrations
-  evolution/       - Engine, reflection, validation, versioning, judges
+  evolution/       - Engine, gate, queue, cadence, reflection subprocess, invariant check, versioning
   mcp/             - MCP server, tools, auth, transport, dynamic tools, peers
   memory/          - Qdrant client, episodic/semantic/procedural stores
   onboarding/      - First-run detection, state, prompt injection

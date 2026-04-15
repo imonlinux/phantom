@@ -181,4 +181,50 @@ describe("EvolutionQueue", () => {
 		queue.clear();
 		expect(queue.depth()).toBe(0);
 	});
+
+	test("Phase 3: markFailed increments retry_count", () => {
+		const queue = new EvolutionQueue(db);
+		queue.enqueue(makeSummary({ session_id: "r1", session_key: "slack:Cr1:Tr1" }), DECISION);
+		const drained1 = queue.drainAll();
+		expect(drained1[0].retry_count).toBe(0);
+
+		const disposition = queue.markFailed([drained1[0].id], { [drained1[0].id]: "I1: bad scope" });
+		expect(disposition.retried).toEqual([drained1[0].id]);
+		expect(disposition.poisoned).toEqual([]);
+
+		const drained2 = queue.drainAll();
+		expect(drained2).toHaveLength(1);
+		expect(drained2[0].retry_count).toBe(1);
+	});
+
+	test("Phase 3: three markFailed calls move the row to poison", () => {
+		const queue = new EvolutionQueue(db);
+		queue.enqueue(makeSummary({ session_id: "r2", session_key: "slack:Cr2:Tr2" }), DECISION);
+		let row = queue.drainAll()[0];
+		queue.markFailed([row.id]);
+		row = queue.drainAll()[0];
+		expect(row.retry_count).toBe(1);
+
+		queue.markFailed([row.id]);
+		row = queue.drainAll()[0];
+		expect(row.retry_count).toBe(2);
+
+		queue.markFailed([row.id]);
+		expect(queue.depth()).toBe(0);
+
+		const poison = queue.listPoisonPile();
+		expect(poison).toHaveLength(1);
+		expect(poison[0].session_id).toBe("r2");
+	});
+
+	test("Phase 3: moveToPoisonPile sends a row directly to poison", () => {
+		const queue = new EvolutionQueue(db);
+		queue.enqueue(makeSummary({ session_id: "r3", session_key: "slack:Cr3:Tr3" }), DECISION);
+		const row = queue.drainAll()[0];
+		queue.moveToPoisonPile([row.id], { [row.id]: "credential leak" });
+		expect(queue.depth()).toBe(0);
+		const poison = queue.listPoisonPile();
+		expect(poison).toHaveLength(1);
+		expect(poison[0].failure_reason).toBe("credential leak");
+	});
 });

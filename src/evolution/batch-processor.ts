@@ -1,24 +1,20 @@
 import type { EvolutionEngine } from "./engine.ts";
 import type { QueuedSession } from "./queue.ts";
-import type { EvolutionResult } from "./types.ts";
+import type { ReflectionSubprocessResult } from "./types.ts";
 
-// Phase 2 batch processor. This is a DELIBERATE TEMPORARY SEAM between the
-// cadence drain path and the existing 6-judge pipeline. Phase 3 will replace
-// the body of `processBatch` with a single reflection subprocess that reads
-// the whole batch and writes memory files directly. The Phase 2 body is
-// intentionally minimal so that replacement is as clean as possible:
+// Phase 3 batch processor. The Phase 2 per-session loop is gone: the
+// reflection subprocess runs once per drain against the full batch. The
+// signature stays compatible with cadence.ts so the downstream drain
+// handling continues to work without changes.
 //
-// - No strategy pattern.
-// - No configuration knobs.
-// - No abstractions that assume the Phase 3 shape.
-// - A thin wrapper that iterates the batch and calls the existing pipeline.
-//
-// If you find yourself adding indirection here, stop. The next builder agent
-// will delete the body of this function entirely.
+// Transient failures (subprocess crash, timeout, parse fail with no
+// writes) leave rows in the queue so the next drain retries them.
+// Invariant hard failures increment retry_count on the rows and graduate
+// them to the poison pile at count >= 3 per Phase 3 failure mode case 4.
 
 export type SessionBatchEntry =
-	| { id: number; ok: true; result: EvolutionResult }
-	| { id: number; ok: false; error: string };
+	| { id: number; ok: true; result: ReflectionSubprocessResult }
+	| { id: number; ok: false; error: string; invariantFailed: boolean };
 
 export type BatchResult = {
 	processed: number;
@@ -28,38 +24,69 @@ export type BatchResult = {
 	durationMs: number;
 };
 
-/**
- * Drain the queue rows and run the existing evolution pipeline per session.
- * Phase 0's mutex guards the engine so the cadence caller is responsible for
- * serialising batches; `processBatch` itself does not acquire the mutex.
- *
- * Partial failures continue through the batch: if the pipeline throws on one
- * session, we record the error and move to the next row. Phase 0's
- * `CycleAborted` catch inside `engine.afterSession` means each session's
- * failure mode is already bounded.
- */
 export async function processBatch(queuedSessions: QueuedSession[], engine: EvolutionEngine): Promise<BatchResult> {
 	const startedAt = Date.now();
-	const results: SessionBatchEntry[] = [];
-	let successCount = 0;
-	let failureCount = 0;
-
-	for (const queued of queuedSessions) {
-		try {
-			const result = await engine.runSingleSessionPipeline(queued.session_summary);
-			results.push({ id: queued.id, ok: true, result });
-			successCount += 1;
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			results.push({ id: queued.id, ok: false, error: msg });
-			failureCount += 1;
-		}
+	if (queuedSessions.length === 0) {
+		return { processed: 0, successCount: 0, failureCount: 0, results: [], durationMs: 0 };
 	}
+
+	let result: ReflectionSubprocessResult;
+	try {
+		result = await engine.runDrainPipeline(queuedSessions);
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		const results: SessionBatchEntry[] = queuedSessions.map((q) => ({
+			id: q.id,
+			ok: false,
+			error: msg,
+			invariantFailed: false,
+		}));
+		return {
+			processed: results.length,
+			successCount: 0,
+			failureCount: results.length,
+			results,
+			durationMs: Date.now() - startedAt,
+		};
+	}
+
+	const invariantFailed = result.invariantHardFailures.length > 0;
+	const shouldMarkFailed = result.incrementRetryOnFailure || invariantFailed;
+
+	if (shouldMarkFailed) {
+		const results: SessionBatchEntry[] = queuedSessions.map((q) => ({
+			id: q.id,
+			ok: false,
+			error: result.error ?? "invariant hard fail",
+			invariantFailed: true,
+		}));
+		return {
+			processed: results.length,
+			successCount: 0,
+			failureCount: results.length,
+			results,
+			durationMs: Date.now() - startedAt,
+		};
+	}
+
+	// Skip / ok / transient error paths all mark the rows as processed
+	// because the batch was consumed. Transient errors do NOT increment
+	// retry_count; they just keep rows in the queue via a different code
+	// path. The cadence uses `ok` to decide whether to delete from the
+	// queue, so we report ok=true for skip/success and ok=false only for
+	// invariant hard fails.
+	const ok = !result.error;
+	const results: SessionBatchEntry[] = queuedSessions.map((q) => {
+		if (ok) {
+			return { id: q.id, ok: true as const, result };
+		}
+		return { id: q.id, ok: false as const, error: result.error ?? "unknown", invariantFailed: false };
+	});
 
 	return {
 		processed: results.length,
-		successCount,
-		failureCount,
+		successCount: ok ? results.length : 0,
+		failureCount: ok ? 0 : results.length,
 		results,
 		durationMs: Date.now() - startedAt,
 	};

@@ -20,6 +20,14 @@ COPY public/ public/
 COPY skills-builtin/ skills-builtin/
 COPY tsconfig.json biome.json ./
 
+# --- Chat UI Build Stage ---
+FROM oven/bun:1 AS chat-ui-builder
+WORKDIR /app/chat-ui
+COPY chat-ui/package.json chat-ui/bun.lock* ./
+RUN bun install --frozen-lockfile
+COPY chat-ui/ ./
+RUN bun run build
+
 # --- Runtime Stage ---
 FROM oven/bun:1-slim
 WORKDIR /app
@@ -73,6 +81,7 @@ COPY --from=builder /app/src ./src
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/public ./public
+COPY --from=chat-ui-builder /app/chat-ui/dist ./public/chat
 COPY --from=builder /app/skills-builtin ./skills-builtin
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/tsconfig.json ./

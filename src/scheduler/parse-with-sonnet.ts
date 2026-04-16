@@ -6,28 +6,17 @@
 // fires, the agent gets the operator's final `task` prompt and decides what
 // to do with it. Sonnet here is form plumbing, not a routing layer.
 //
-// A tiny one-shot Messages API call with forced tool-use is the simplest
-// shape that produces validated structured output. We do not use the Agent
-// SDK for this: a raw Messages call avoids the subprocess overhead and the
-// full tool surface we do not need.
+// A tiny one-shot Messages API call with forced tool-use. We do not use the
+// Agent SDK: a raw Messages call avoids subprocess overhead and the full
+// tool surface we do not need.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { JobCreateInputSchema, type JobCreateInputParsed } from "./tool-schema.ts";
+import { type JobCreateInputParsed, JobCreateInputSchema } from "./tool-schema.ts";
 
 type AnthropicClient = InstanceType<typeof Anthropic>;
 
-export type ParseSuccess = {
-	ok: true;
-	proposal: JobCreateInputParsed;
-	warnings: string[];
-};
-
-export type ParseFailure = {
-	ok: false;
-	status: 422 | 503 | 504;
-	error: string;
-};
-
+export type ParseSuccess = { ok: true; proposal: JobCreateInputParsed; warnings: string[] };
+export type ParseFailure = { ok: false; status: 422 | 503 | 504; error: string };
 export type ParseResult = ParseSuccess | ParseFailure;
 
 export type ParseDeps = {
@@ -39,40 +28,23 @@ export type ParseDeps = {
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_TIMEOUT_MS = 15_000;
+const GENERIC_ERROR = "Could not parse description, please fill the form manually.";
 
-// JSON Schema matching JobCreateInputSchema in tool-schema.ts. Hand-written
-// because the repo does not pull zod-to-json-schema; keeping it local avoids
-// adding a dependency for a ~40-line conversion. The Zod parse on the server
-// is the source of truth; this schema is advisory for Sonnet.
-const PROPOSE_JOB_INPUT_SCHEMA: {
-	type: "object";
-	properties: Record<string, unknown>;
-	required: string[];
-	additionalProperties: boolean;
-} = {
+// JSON Schema for the forced tool-use. The Zod parse on the server is the
+// source of truth; this schema guides Sonnet's output. Hand-written so we do
+// not pull zod-to-json-schema for a ~40-line conversion.
+const PROPOSE_JOB_INPUT_SCHEMA = {
 	type: "object",
 	properties: {
-		name: {
-			type: "string",
-			minLength: 1,
-			maxLength: 200,
-			description: "Short, kebab-case-ish job name, 1..200 chars (e.g. hn-digest, pr-review-reminder).",
-		},
-		description: {
-			type: "string",
-			maxLength: 1000,
-			description: "One-sentence human summary of what this job does.",
-		},
+		name: { type: "string", minLength: 1, maxLength: 200, description: "Short kebab-case job name (e.g. hn-digest)." },
+		description: { type: "string", maxLength: 1000, description: "One-sentence human summary." },
 		schedule: {
 			oneOf: [
 				{
 					type: "object",
 					properties: {
 						kind: { const: "at" },
-						at: {
-							type: "string",
-							description: "ISO 8601 with explicit offset (e.g. 2026-04-18T15:00:00-07:00).",
-						},
+						at: { type: "string", description: "ISO 8601 with explicit offset (2026-04-18T15:00:00-07:00)." },
 					},
 					required: ["kind", "at"],
 					additionalProperties: false,
@@ -81,11 +53,7 @@ const PROPOSE_JOB_INPUT_SCHEMA: {
 					type: "object",
 					properties: {
 						kind: { const: "every" },
-						intervalMs: {
-							type: "integer",
-							minimum: 1,
-							description: "Interval in milliseconds. 6 hours = 21600000.",
-						},
+						intervalMs: { type: "integer", minimum: 1, description: "Interval in ms. 6h = 21600000." },
 					},
 					required: ["kind", "intervalMs"],
 					additionalProperties: false,
@@ -94,10 +62,7 @@ const PROPOSE_JOB_INPUT_SCHEMA: {
 					type: "object",
 					properties: {
 						kind: { const: "cron" },
-						expr: {
-							type: "string",
-							description: "5-field cron: minute hour day-of-month month day-of-week. No nicknames.",
-						},
+						expr: { type: "string", description: "5-field cron, no nicknames." },
 						tz: { type: "string", description: "IANA timezone name." },
 					},
 					required: ["kind", "expr"],
@@ -109,17 +74,13 @@ const PROPOSE_JOB_INPUT_SCHEMA: {
 			type: "string",
 			minLength: 1,
 			maxLength: 32 * 1024,
-			description:
-				"Self-contained instruction for the agent to execute when the job fires. Include every piece of context the run will need.",
+			description: "Self-contained instruction the agent runs when the job fires.",
 		},
 		delivery: {
 			type: "object",
 			properties: {
 				channel: { enum: ["slack", "none"] },
-				target: {
-					type: "string",
-					description: '"owner" for owner DM, or a Slack channel id (C...) or user id (U...).',
-				},
+				target: { type: "string", description: '"owner", C... channel id, or U... user id.' },
 			},
 			additionalProperties: false,
 		},
@@ -127,67 +88,38 @@ const PROPOSE_JOB_INPUT_SCHEMA: {
 	},
 	required: ["name", "schedule", "task"],
 	additionalProperties: false,
-};
+} as const;
 
 const SYSTEM_PROMPT = [
-	"You are helping an operator author a scheduled job for an autonomous AI agent.",
-	"Convert the operator's plain-English description into a structured job proposal.",
-	"",
-	"Fields:",
-	"- name: kebab-case short label (hn-digest, pr-review-reminder, daily-standup).",
-	'- description: one sentence summary.',
-	"- task: self-contained instruction the agent will execute when the job fires.",
-	"  The agent will not have the current conversation context. Include every URL,",
-	"  repo name, channel, or constraint the run needs. Write imperative, concrete.",
-	"- schedule: one of",
-	'  { "kind": "at", "at": "<ISO 8601 with offset>" } for one-shot runs,',
-	'  { "kind": "every", "intervalMs": <ms> } for simple intervals,',
-	'  { "kind": "cron", "expr": "<5-field cron>", "tz": "<IANA tz>" } for calendar patterns.',
-	"- delivery: default { channel: 'slack', target: 'owner' } unless the operator specified a Slack channel id (C...) or user id (U...).",
-	"",
-	"Heuristics:",
-	"- 'every 6 hours' -> every, intervalMs 21600000.",
-	"- 'every 30 minutes' -> every, intervalMs 1800000.",
-	"- '9am weekdays' / 'weekday mornings' -> cron, '0 9 * * 1-5', tz America/Los_Angeles.",
-	"- '9am daily' -> cron, '0 9 * * *', tz America/Los_Angeles.",
-	"- 'Friday 5pm' -> cron, '0 17 * * 5', tz America/Los_Angeles.",
-	"- 'tomorrow at 3pm' or a specific date -> at with ISO 8601 and an explicit offset.",
-	"- Default timezone America/Los_Angeles when the operator did not specify one.",
-	"",
-	"Always call the `propose_job` tool exactly once with a valid argument object.",
-	"If the description is incoherent or you cannot infer a schedule, still call the",
-	"tool with your best-effort values and set `task` to an empty string so the",
-	"operator fills it in manually.",
+	"You help an operator author a scheduled job for an autonomous AI agent.",
+	"Convert their English description into structured fields.",
+	"- name: kebab-case label.",
+	"- task: imperative, self-contained instruction. The scheduled run does not see current context; include every URL, repo, channel.",
+	'- schedule: { kind:"at", at:<ISO8601+offset> } | { kind:"every", intervalMs:<n> } | { kind:"cron", expr:<5-field>, tz:<IANA> }.',
+	"- delivery defaults to { channel:'slack', target:'owner' }.",
+	"Heuristics: 'every 6h'->every/21600000; '9am weekdays'->cron '0 9 * * 1-5' tz America/Los_Angeles; 'Friday 5pm'->cron '0 17 * * 5'; specific date->at with offset. Default tz America/Los_Angeles if unspecified.",
+	"Call `propose_job` once. If the description is incoherent, emit best-effort values and set task to empty string so the operator fills it.",
 ].join("\n");
 
 function defaultClientFactory(apiKey: string): AnthropicClient {
 	return new Anthropic({ apiKey });
 }
 
-function extractErrorMessage(err: unknown): string {
-	if (err instanceof Error) return err.message;
-	return String(err);
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 /**
  * Call Sonnet with a forced tool-use schema and return a structured proposal
- * the operator can review before saving. Does not mutate any state; the
- * actual job creation happens only when the operator hits Save in the UI.
- *
- * The caller is responsible for length-validating `description` before
- * invoking this function. On any failure we return a typed error so the
- * UI can surface it inline without exposing the raw SDK error to the client.
+ * the operator can review before saving. Does not mutate any state; the job
+ * is created only when the operator hits Save.
  */
 export async function parseJobDescription(description: string, deps: ParseDeps = {}): Promise<ParseResult> {
 	// Explicit null in deps means "no key available" (test seam). Undefined
 	// means "fall back to the env var".
 	const apiKey = "apiKey" in deps ? deps.apiKey : process.env.ANTHROPIC_API_KEY;
 	if (!apiKey) {
-		return {
-			ok: false,
-			status: 503,
-			error: "Sonnet assist requires ANTHROPIC_API_KEY.",
-		};
+		return { ok: false, status: 503, error: "Sonnet assist requires ANTHROPIC_API_KEY." };
 	}
 
 	const clientFactory = deps.clientFactory ?? defaultClientFactory;
@@ -207,8 +139,7 @@ export async function parseJobDescription(description: string, deps: ParseDeps =
 				tools: [
 					{
 						name: "propose_job",
-						description:
-							"Propose a structured scheduled-job payload that the operator will review and edit before saving.",
+						description: "Structured scheduled-job payload the operator reviews and edits before saving.",
 						input_schema: PROPOSE_JOB_INPUT_SCHEMA as unknown as {
 							type: "object";
 							properties?: unknown;
@@ -222,46 +153,22 @@ export async function parseJobDescription(description: string, deps: ParseDeps =
 			{ signal: controller.signal },
 		);
 
-		const toolBlock = response.content.find((b): b is { type: "tool_use"; input: unknown; name: string; id: string } => {
-			return (b as { type?: string }).type === "tool_use" && (b as { name?: string }).name === "propose_job";
-		});
-
-		if (!toolBlock) {
-			return {
-				ok: false,
-				status: 422,
-				error: "Could not parse description, please fill the form manually.",
-			};
+		const blocks = response.content as Array<{ type: string; name?: string; input?: unknown }>;
+		const toolBlock = blocks.find((b) => b.type === "tool_use" && b.name === "propose_job");
+		if (!toolBlock || toolBlock.input === undefined) {
+			return { ok: false, status: 422, error: GENERIC_ERROR };
 		}
 
 		const parsed = JobCreateInputSchema.safeParse(toolBlock.input);
-		if (!parsed.success) {
-			return {
-				ok: false,
-				status: 422,
-				error: "Could not parse description, please fill the form manually.",
-			};
-		}
+		if (!parsed.success) return { ok: false, status: 422, error: GENERIC_ERROR };
 
-		return {
-			ok: true,
-			proposal: parsed.data,
-			warnings: [],
-		};
+		return { ok: true, proposal: parsed.data, warnings: [] };
 	} catch (err: unknown) {
-		const msg = extractErrorMessage(err);
+		const msg = errorMessage(err);
 		if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
-			return {
-				ok: false,
-				status: 504,
-				error: "Sonnet assist timed out, please fill the form manually.",
-			};
+			return { ok: false, status: 504, error: "Sonnet assist timed out, please fill the form manually." };
 		}
-		return {
-			ok: false,
-			status: 422,
-			error: "Could not parse description, please fill the form manually.",
-		};
+		return { ok: false, status: 422, error: GENERIC_ERROR };
 	} finally {
 		clearTimeout(timer);
 	}

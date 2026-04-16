@@ -1,9 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { parseJobDescription } from "../parse-with-sonnet.ts";
 
-type FakeContentBlock =
-	| { type: "text"; text: string }
-	| { type: "tool_use"; id: string; name: string; input: unknown };
+type FakeContentBlock = { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown };
 
 function makeClient(handler: () => Promise<{ content: FakeContentBlock[] }>) {
 	return { messages: { create: mock(handler) } };
@@ -37,13 +35,10 @@ describe("parseJobDescription", () => {
 
 	test("happy path: Sonnet returns a valid proposal", async () => {
 		const client = makeClient(async () => ({ content: hnToolUse() }));
-		const result = await parseJobDescription(
-			"Pull top HN stories every 6 hours and post a summary to my Slack DM",
-			{
-				apiKey: "test-key",
-				clientFactory: () => client as never,
-			},
-		);
+		const result = await parseJobDescription("Pull top HN stories every 6 hours and post a summary to my Slack DM", {
+			apiKey: "test-key",
+			clientFactory: () => client as never,
+		});
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("expected success");
@@ -53,7 +48,11 @@ describe("parseJobDescription", () => {
 	});
 
 	test("forces tool_choice to propose_job", async () => {
-		const createMock = mock(async () => ({ content: hnToolUse() }));
+		const seen: Array<unknown> = [];
+		const createMock = mock(async (args: unknown) => {
+			seen.push(args);
+			return { content: hnToolUse() };
+		});
 		const client = { messages: { create: createMock } };
 		await parseJobDescription("schedule anything", {
 			apiKey: "test-key",
@@ -61,8 +60,11 @@ describe("parseJobDescription", () => {
 		});
 
 		expect(createMock).toHaveBeenCalledTimes(1);
-		const call = createMock.mock.calls[0];
-		const args = call[0] as { tool_choice?: { type: string; name: string }; tools?: Array<{ name: string }>; model?: string };
+		const args = seen[0] as {
+			tool_choice?: { type: string; name: string };
+			tools?: Array<{ name: string }>;
+			model?: string;
+		};
 		expect(args.tool_choice).toEqual({ type: "tool", name: "propose_job" });
 		expect(args.tools?.[0]?.name).toBe("propose_job");
 		expect(args.model).toBe("claude-sonnet-4-6");
@@ -202,7 +204,7 @@ describe("parseJobDescription", () => {
 			});
 			expect(result.ok).toBe(true);
 		} finally {
-			if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+			if (prev === undefined) process.env.ANTHROPIC_API_KEY = undefined;
 			else process.env.ANTHROPIC_API_KEY = prev;
 		}
 	});

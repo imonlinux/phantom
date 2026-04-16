@@ -18,7 +18,10 @@ export const JobCreateInputSchema = z.object({
 	name: z.string().min(1).max(200),
 	description: z.string().max(1000).optional(),
 	schedule: ScheduleInputSchema,
-	task: z.string().min(1).max(32 * 1024),
+	task: z
+		.string()
+		.min(1)
+		.max(32 * 1024),
 	delivery: JobDeliverySchema.optional(),
 	deleteAfterRun: z.boolean().optional(),
 	createdBy: z.enum(["agent", "user"]).optional(),

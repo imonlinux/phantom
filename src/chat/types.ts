@@ -1,4 +1,4 @@
-// Wire frame types for the 24-event chat streaming protocol.
+// Wire frame types for the 32-event chat streaming protocol.
 // Discriminated union on `event` field. Matches ARCHITECTURE.md Section 2.
 
 export type ChatToolState =

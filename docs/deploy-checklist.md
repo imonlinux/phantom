@@ -232,6 +232,20 @@ The `phantom init --yes` step prints MCP tokens. Save the Admin token. This is u
 }
 ```
 
+## Chat UI on Bare Metal Deploys
+
+Bare metal deployments (rsync-based, not Docker Hub) need to build and overlay the chat client manually after syncing code:
+
+```bash
+# On the VM, after rsync:
+cd /home/specter/phantom/chat-ui
+bun install --frozen-lockfile
+bun run build
+cp -r dist/* ../public/chat/
+```
+
+Docker Hub deploys get this automatically. The Docker image includes a pre-built chat-ui SPA, and the entrypoint seeding logic copies it into the `phantom_public` volume on every start. No manual overlay is needed.
+
 ## Updating a Deployed Phantom
 
 To deploy new code to an existing VM:

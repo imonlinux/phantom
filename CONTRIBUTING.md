@@ -87,7 +87,7 @@ If you are unsure whether something belongs in TypeScript or in a prompt, open a
 ## Running Tests
 
 ```bash
-# Run the full suite (770 tests)
+# Run the full suite (1,584 tests)
 bun test
 
 # Run a single test file
@@ -101,6 +101,11 @@ bun run lint
 
 # Typecheck
 bun run typecheck
+
+# Chat UI (separate build, separate package.json)
+cd chat-ui && bun install        # Install chat-ui dependencies
+cd chat-ui && bun run build      # Build production SPA
+cd chat-ui && bun run typecheck  # Type-check the chat client
 ```
 
 All three must pass before submitting a PR: tests, lint, and typecheck.

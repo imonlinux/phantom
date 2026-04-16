@@ -1,6 +1,6 @@
 # Phantom
 
-Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Telegram/Email/Webhook, and exposes all capabilities as an MCP server. 27,000+ lines of TypeScript, 875 tests, v0.18.2. Apache 2.0, repo at ghostwright/phantom.
+Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Web Chat/Telegram/Email/Webhook, and exposes all capabilities as an MCP server. 30,000+ lines of TypeScript, 1,584 tests, v0.19.0. Apache 2.0, repo at ghostwright/phantom.
 
 ## Tech Stack
 
@@ -10,7 +10,8 @@ Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a
 | Agent | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) subprocess. Provider is configurable via `src/config/providers.ts`: Anthropic (default), Z.AI, OpenRouter, Ollama, vLLM, LiteLLM, custom. |
 | Memory | Qdrant (vector DB, Docker) + Ollama (nomic-embed-text, local embeddings) |
 | State | SQLite via Bun (sessions, tasks, metrics, evolution versions, scheduled jobs) |
-| Channels | Slack (Socket Mode, primary), Telegram (long polling), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI |
+| Channels | Slack (Socket Mode), Web Chat (SSE streaming), Telegram (long polling), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI |
+| Chat Client | React 19 + Vite + shadcn/ui + Tailwind v4 SPA at `/chat` |
 | Web UI | Tailwind v4 Browser CDN + DaisyUI v5, static files from public/ |
 | MCP | Streamable HTTP on /mcp, bearer token auth, 17+ tools |
 | Infrastructure | Docker (compose), Specter VMs (Hetzner), systemd (bare metal) |
@@ -41,13 +42,22 @@ If you find yourself writing a function that does something the agent can do bet
 
 ```bash
 bun install                          # Install dependencies
-bun test                             # Run 875 tests
+bun test                             # Run 1,584 tests
 bun run src/index.ts                 # Start the server
 bun run src/cli/main.ts init --yes   # Initialize config (reads env vars)
 bun run src/cli/main.ts doctor       # Check all subsystems
 bun run src/cli/main.ts status       # Quick one-liner status
 bun run lint                         # Biome check
 bun run typecheck                    # tsc --noEmit
+
+# Chat UI (separate build)
+cd chat-ui && bun install            # Install chat-ui dependencies
+cd chat-ui && bun run build          # Build production SPA to chat-ui/dist/
+cd chat-ui && bun run typecheck      # Type-check the chat client
+cd chat-ui && bun run dev            # Dev server on :5173 (proxy to :3100)
+
+# Chat-UI dev loop: run Phantom on :3100 in one terminal, Vite on :5173 in another.
+# Vite proxies /chat/* API calls to :3100. Open http://localhost:5173/chat.
 ```
 
 ## Project Structure
@@ -60,6 +70,19 @@ src/
     prompt-assembler.ts # System prompt: base + role + evolved + memory context
     hooks.ts            # Safety hooks (dangerous command blocker, file tracker)
     in-process-tools.ts # In-process MCP tool servers (dynamic, scheduler, web UI)
+  chat/
+    http.ts             # SSE endpoint, session management, message routing
+    http-handlers.ts    # Request handlers for chat API routes
+    types.ts            # 32-event SSE wire format (discriminated union)
+    sdk-to-wire.ts      # Translates Agent SDK events to chat wire frames
+    session-store.ts    # In-memory chat session state
+    message-store.ts    # Persistent message history (SQLite)
+    stream-bus.ts       # Fan-out SSE event bus (multi-tab support)
+    upload.ts           # File attachment upload handler
+    validators.ts       # Type allowlist and size limits for attachments
+    first-run.ts        # Email-based first login (Resend)
+    email-login.ts      # Magic link email delivery
+    notifications/      # Web Push (VAPID keys, subscriptions, triggers)
   channels/
     slack.ts            # Slack Socket Mode (primary channel, owner access control)
     telegram.ts         # Telegram via Telegraf
@@ -116,6 +139,7 @@ src/
 config/                 # YAML configs (phantom.yaml, channels.yaml, mcp.yaml, roles/)
 phantom-config/         # Evolved agent config (constitution, persona, domain knowledge)
 public/                 # Web UI files (_base.html template, index.html)
+chat-ui/                # React 19 SPA (Vite + shadcn + Tailwind v4). Built to public/chat/
 scripts/
   install.sh            # Standalone install script for Ubuntu/Debian
   docker-entrypoint.sh  # Docker bootstrap (wait for deps, model pull, init)
@@ -124,7 +148,7 @@ docs/                   # Documentation (architecture, channels, mcp, security, 
 
 ## Architecture Overview
 
-Message flow: Slack message -> SlackChannel adapter -> ChannelRouter -> SessionManager (find/create session) -> PromptAssembler (base + role + evolved config + memory context) -> AgentRuntime.query() (Opus 4.6 with full tools) -> response -> ChannelRouter -> Slack thread reply.
+Message flow: Slack message -> SlackChannel adapter -> ChannelRouter -> SessionManager (find/create session) -> PromptAssembler (base + role + evolved config + memory context) -> AgentRuntime.query() (Opus 4.6 with full tools) -> response -> ChannelRouter -> Slack thread reply. Web chat uses the same flow: POST /chat/sessions/:id/message -> SSE stream of wire frames -> React client renders in real time. Two separate transcripts (wire-format message store for the client, SDK conversation for the agent) are kept in sync.
 
 After each session: EvolutionEngine runs 6-step reflection pipeline -> 5-gate validation -> approved changes applied to phantom-config/ -> version bumped.
 
@@ -193,6 +217,7 @@ Production deployments are managed internally. Do NOT modify production deployme
 | `src/channels/slack.ts` | Primary channel. Owner access control, threading, reactions. |
 | `src/mcp/server.ts` | MCP server setup. Tool registration, auth integration. |
 | `src/memory/system.ts` | Memory coordinator. How the three tiers connect. |
+| `src/chat/http.ts` | Web chat backend. SSE streaming, session routing, API handlers. |
 | `src/core/server.ts` | HTTP server. Routes, health endpoint, version. |
 | `config/roles/swe.yaml` | SWE role template. Onboarding questions, tools, evolution focus. |
 | `phantom-config/constitution.md` | Immutable principles the evolution engine cannot modify. |

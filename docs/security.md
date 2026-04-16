@@ -47,7 +47,34 @@ These are configured automatically by the [app manifest](../slack-app-manifest.y
 | `SLACK_APP_TOKEN` | For Slack | App-level token for Socket Mode (`xapp-`) |
 | `SLACK_CHANNEL_ID` | For Slack | Default channel for intro message on first start |
 | `TELEGRAM_BOT_TOKEN` | For Telegram | Telegram bot token from @BotFather |
+| `OWNER_EMAIL` | For web chat | Email address for magic link login to `/chat` |
+| `RESEND_API_KEY` | For email login | Resend API key for sending magic link emails |
 | `PORT` | No (default 3100) | HTTP server port |
+
+## Web Chat Authentication
+
+The web chat at `/chat` uses cookie-based sessions with magic link login:
+
+- On first visit, the user enters their email address
+- Phantom sends a one-time magic link via Resend (or prints a bootstrap token to stdout)
+- Clicking the link sets a session cookie (30-day expiry, HttpOnly, SameSite=Lax)
+- The cookie is validated on every chat API request and SSE connection
+
+On first run without Slack, Phantom triggers the login flow automatically for `OWNER_EMAIL`. The magic link token is single-use and expires after 30 minutes.
+
+### Web Push (VAPID)
+
+Web Push notifications use VAPID (Voluntary Application Server Identification). The VAPID key pair is generated on first use and stored in SQLite (the `kv_store` table). Private keys never leave the server. Push subscriptions are per-browser and stored in SQLite.
+
+### File Attachment Security
+
+Uploads to `/chat/sessions/:id/attachments` are validated server-side:
+
+- **Type allowlist**: images (JPEG, PNG, GIF, WebP), PDF, and text/code files only
+- **Size limits**: images 10 MB, PDFs 32 MB, text 1 MB, total request 40 MB
+- **Per-request cap**: 10 files maximum
+- **Filename sanitization**: path separators, special characters, and leading dots are stripped
+- **Preview Content-Disposition**: attachment previews use `inline` disposition so browsers render them rather than downloading
 
 ## MCP Authentication
 

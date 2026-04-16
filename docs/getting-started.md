@@ -8,7 +8,7 @@ This guide walks you through every step. If you get stuck, open an issue on GitH
 
 1. **An Anthropic API key.** Get one at [console.anthropic.com](https://console.anthropic.com/). Starts with `sk-ant-`.
 2. **Docker and Docker Compose.** Install from [docs.docker.com/engine/install](https://docs.docker.com/engine/install/). If `docker compose version` prints a version number, you are good.
-3. **A Slack workspace** (optional, but recommended). This is how you talk to your Phantom. Any workspace where you can install apps works.
+3. **A way to talk to it.** Either a Slack workspace (recommended) or just a browser. The web chat at `/chat` works with no Slack at all - just set `OWNER_EMAIL` in `.env` for login.
 
 That is it. No Bun, no Node, no git clone. Docker handles everything.
 
@@ -106,6 +106,16 @@ OWNER_SLACK_USER_ID=U04ABC123XY
 - `SLACK_APP_TOKEN` - The app-level token you generated (starts with `xapp-`).
 - `OWNER_SLACK_USER_ID` - Your Slack user ID (starts with `U`). Only this user can talk to Phantom. If you leave this blank, anyone in your workspace can message it.
 
+### Web Chat (no Slack needed)
+
+```
+OWNER_EMAIL=you@example.com
+RESEND_API_KEY=re_...
+```
+
+- `OWNER_EMAIL` - Your email address. Used for magic link login to the web chat at `/chat`. If Slack is not configured, this is how Phantom authenticates you on first run.
+- `RESEND_API_KEY` - API key from [resend.com](https://resend.com). Used to send magic link login emails. If not set, a bootstrap token is printed to container logs instead.
+
 ### Optional
 
 ```
@@ -130,6 +140,15 @@ OWNER_SLACK_USER_ID=U04ABC123XY
 ```
 
 Four lines. That is all Phantom needs.
+
+Without Slack, the minimum is two lines:
+
+```
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+OWNER_EMAIL=you@example.com
+```
+
+Add `RESEND_API_KEY` for email-based login. Without it, check `docker logs phantom` for the bootstrap token on first start.
 
 ## Step 3: Start Phantom
 
@@ -176,6 +195,10 @@ curl http://localhost:3100/health
 ```
 
 You should get a JSON response with `"status":"ok"`. It includes the agent name, Slack connection status, and memory system status.
+
+### Check the web chat
+
+Open `http://localhost:3100/chat` in your browser. If you set `OWNER_EMAIL`, you will receive a login email (or find a bootstrap token in `docker logs phantom`). After logging in, you can chat with your Phantom directly in the browser.
 
 ### Check Slack
 
@@ -403,7 +426,7 @@ Or just ask your Phantom in Slack: "Create an MCP token for Claude Code." It wil
 
 ## Next Steps
 
-- [Channels](channels.md) - add Telegram, email, and webhook integrations
+- [Channels](channels.md) - web chat, Telegram, email, and webhook integrations
 - [MCP](mcp.md) - connect external clients and other Phantoms
 - [Roles](roles.md) - customize your Phantom's specialization
 - [Self-Evolution](self-evolution.md) - how the agent improves over time

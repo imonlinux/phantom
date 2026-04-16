@@ -58,16 +58,26 @@ Phantom is a single Bun process that runs on a VM. It combines an agent runtime,
 
 ### HTTP Server
 
-`src/core/server.ts` - Bun.serve() on port 3100. Three routes:
+`src/core/server.ts` - Bun.serve() on port 3100. Key routes:
 - `/health` - JSON health status (status, uptime, version, channels, memory, evolution)
 - `/mcp` - MCP Streamable HTTP endpoint
 - `/webhook` - Inbound webhook receiver
+- `/chat/*` - Web chat API (SSE streaming, sessions, attachments, push subscriptions)
+- `/ui/*` - Static pages and login (magic link auth)
 
 ### Channel Router
 
 `src/channels/router.ts` - Multiplexes messages from all connected channels. Each channel implements the `Channel` interface: `connect()`, `disconnect()`, `send()`, `onMessage()`.
 
-Channels: Slack (Socket Mode), Telegram (long polling), Email (IMAP/SMTP), Webhook (HTTP), CLI (readline).
+Channels: Slack (Socket Mode), Web Chat (SSE streaming at `/chat`), Telegram (long polling), Email (IMAP/SMTP), Webhook (HTTP), CLI (readline).
+
+### Web Chat Channel
+
+`src/chat/` - A full browser-based chat channel with a React 19 SPA at `/chat`. The backend uses Server-Sent Events (SSE) to stream a 32-event wire format from the Agent SDK to the client in real time. Two independent transcripts are maintained: the wire-format message store (what the client sees) and the SDK conversation (what the agent sees). This two-transcript invariant means the client can render markdown, tool calls, thinking blocks, and subagent progress without coupling to SDK internals.
+
+Auth uses cookie-based sessions with magic link login. On first run without Slack, a login email is sent via Resend (or a bootstrap token is printed to stdout). Web Push notifications (VAPID) alert users when the agent responds while the tab is in the background.
+
+File attachments (images, PDFs, text files) are uploaded via multipart POST and passed to the agent as context. Type allowlist and size limits are enforced server-side.
 
 ### Agent Runtime
 
@@ -114,7 +124,7 @@ Embeddings via Ollama (nomic-embed-text, 768d vectors). Hybrid search using dens
 
 ## Data Flow
 
-1. Message arrives via channel (Slack mention, webhook POST, etc.)
+1. Message arrives via channel (Slack mention, webhook POST, web chat, etc.)
 2. Channel router normalizes to `InboundMessage`
 3. Session manager finds or creates a session
 4. Prompt assembler builds the full system prompt
@@ -122,6 +132,8 @@ Embeddings via Ollama (nomic-embed-text, 768d vectors). Hybrid search using dens
 6. Response routed back through the originating channel
 7. Memory consolidation runs (non-blocking)
 8. Evolution pipeline runs (non-blocking)
+
+For web chat specifically: the client sends `POST /chat/sessions/:id/message`, the server starts an Agent SDK `query()`, and SDK events are translated to wire frames and pushed to all connected SSE streams for that session (supporting multi-tab). The wire format includes session lifecycle, text streaming, thinking blocks, tool calls with input streaming, and subagent progress.
 
 ## Technology Stack
 
@@ -132,7 +144,8 @@ Embeddings via Ollama (nomic-embed-text, 768d vectors). Hybrid search using dens
 | Vector DB | Qdrant (Docker) |
 | Embeddings | Ollama (nomic-embed-text) |
 | State DB | SQLite (Bun built-in) |
-| Channels | Slack Bolt, Telegraf, ImapFlow, Nodemailer |
+| Channels | Slack Bolt, Web Chat (SSE), Telegraf, ImapFlow, Nodemailer |
+| Chat Client | React 19, Vite, shadcn/ui, Tailwind v4 |
 | Config | YAML + Zod validation |
 | Process | systemd (on Specter VMs) |
 
@@ -141,6 +154,7 @@ Embeddings via Ollama (nomic-embed-text, 768d vectors). Hybrid search using dens
 ```
 src/
   agent/           - Runtime, prompt assembler, hooks, cost tracking
+  chat/            - Web chat backend (SSE streaming, sessions, attachments, push notifications)
   channels/        - Slack, Telegram, Email, Webhook, CLI, status reactions
   cli/             - CLI commands (init, start, doctor, token, status)
   config/          - YAML config loaders, Zod schemas

@@ -60,6 +60,8 @@ services:
       ollama:
         condition: service_started
     restart: unless-stopped
+    oom_score_adj: -500
+    cpu_shares: 2048
     deploy:
       resources:
         limits:
@@ -69,6 +71,7 @@ services:
           # consolidation) spawned via runJudgeQuery. The prior 2 GiB cap
           # cgroup-OOM-killed judge subprocesses under evolution load.
           memory: 8G
+          pids: 256
         reservations:
           memory: 512M
     networks:

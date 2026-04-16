@@ -124,6 +124,9 @@ RUN mkdir -p /app/data /app/repos && \
 # Backup phantom-config defaults so they survive empty volume mount
 RUN cp -r /app/phantom-config /app/phantom-config-defaults
 
+# Backup image-bundled public assets for entrypoint seeding
+RUN cp -r /app/public /app/public-defaults
+
 # Make entrypoint executable
 RUN chmod +x /app/scripts/docker-entrypoint.sh
 

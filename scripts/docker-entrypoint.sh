@@ -49,6 +49,20 @@ if [ -f /app/src/plugins/seed.ts ]; then
   bun run /app/src/plugins/seed.ts --apply || echo "[phantom] WARNING: plugin seeding failed (continuing)"
 fi
 
+# Sync image-bundled public assets on every start.
+# The phantom_public volume preserves agent-created pages across deploys.
+# Image-owned files (chat-ui SPA, base template) must refresh from the new image.
+if [ -d /app/public-defaults ]; then
+  echo "[phantom] Syncing public assets from image..."
+  cp -r /app/public-defaults/chat /app/public/chat 2>/dev/null || true
+  for f in _base.html _components.html _agent-name.js index.html phantom-logo.svg; do
+    [ -f "/app/public-defaults/$f" ] && cp "/app/public-defaults/$f" "/app/public/$f"
+  done
+  [ -d /app/public-defaults/_examples ] && cp -r /app/public-defaults/_examples /app/public/_examples
+  chown -R 999:999 /app/public 2>/dev/null || true
+  echo "[phantom] Public assets synced"
+fi
+
 # Determine service URLs from environment (with Docker Compose defaults)
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 OLLAMA_URL="${OLLAMA_URL:-http://ollama:11434}"

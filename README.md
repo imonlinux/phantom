@@ -7,9 +7,9 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-875%20passed-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1584%20passed-brightgreen.svg" alt="Tests">
   <a href="https://hub.docker.com/r/ghostwright/phantom"><img src="https://img.shields.io/docker/pulls/ghostwright/phantom.svg" alt="Docker Pulls"></a>
-  <img src="https://img.shields.io/badge/version-0.18.2-orange.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.19.0-orange.svg" alt="Version">
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@ AI agents today are disposable. You open a chat, get an answer, close the tab, a
 
 Phantom takes a different approach: **give the AI its own computer.** A dedicated machine where it installs software, spins up databases, builds dashboards, remembers what you told it last week, and gets measurably better at your job every day. Your laptop stays yours. The agent's workspace is its own.
 
-This is not a chatbot. It is a co-worker that runs on Slack, has its own email address, creates its own tools, and builds infrastructure without asking for permission. Don't take our word for it - scroll down to see what production Phantoms have actually built.
+This is not a chatbot. It is a co-worker that runs on Slack, has a web chat interface at `/chat`, has its own email address, creates its own tools, and builds infrastructure without asking for permission. Don't take our word for it - scroll down to see what production Phantoms have actually built.
 
 ## What This Actually Looks Like
 
@@ -220,6 +220,7 @@ Because the agent that can only use pre-built tools hits a ceiling. Phantom buil
 | **Dynamic tools** | Creates and registers its own MCP tools at runtime. Tools survive restarts and work across sessions. |
 | **Encrypted secrets** | AES-256-GCM encrypted forms with magic-link auth. No plain-text credentials in config files. |
 | **Email identity** | Every Phantom has its own email address. Send reports to people outside your Slack workspace. |
+| **Web chat** | A full browser-based chat client at `/chat` with SSE streaming, file attachments, and Web Push notifications. No Slack required. |
 | **Shareable pages** | Generates dashboards and tools on a public URL with auth. Share a link, anyone can see it. |
 | **MCP server** | Claude Code connects to your Phantom. Other Phantoms connect to your Phantom. It is an API, not a dead end. |
 
@@ -238,10 +239,10 @@ Because the agent that can only use pre-built tools hits a ceiling. Phantom buil
 |                                          |
 |  Channels       Agent Runtime            |
 |  Slack          query() + hooks          |
-|  Telegram       Prompt Assembler         |
-|  Email          base + role + evolved    |
-|  Webhook        + memory context         |
-|  CLI                                     |
+|  Web Chat       Prompt Assembler         |
+|  Telegram       base + role + evolved    |
+|  Email          + memory context         |
+|  Webhook / CLI                           |
 |                                          |
 |  Memory System  Self-Evolution Engine    |
 |  Qdrant         6-step pipeline          |
@@ -379,7 +380,7 @@ bun run phantom start
 ```
 
 ```bash
-bun test              # 770 tests
+bun test              # 1584 tests
 bun run lint          # Biome
 bun run typecheck     # tsc --noEmit
 ```

@@ -1524,3 +1524,582 @@ body {
 	color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
 }
 .dash-save-bar-actions { display: flex; gap: var(--space-2); }
+
+/* ==============================================================
+   Shared dashboard primitives (v0.20 Wave 2)
+   Reused by Sessions, Cost, Scheduler, Memory, Evolution.
+   Keep generic. Tab-specific variants live at the consumer site.
+   ============================================================== */
+
+/* ---- .dash-filter-bar: horizontal filter + search row. ------- */
+.dash-filter-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-md);
+	background: var(--color-base-200);
+	margin-bottom: var(--space-4);
+}
+.dash-filter-group {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.dash-filter-label {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.dash-filter-select {
+	font-family: Inter, system-ui, sans-serif;
+	font-size: 13px;
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-sm);
+	padding: 6px 10px;
+	cursor: pointer;
+	transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-base) var(--ease-out);
+}
+.dash-filter-select:hover {
+	border-color: color-mix(in oklab, var(--color-primary) 30%, var(--color-base-300));
+}
+.dash-filter-select:focus-visible {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 18%, transparent);
+}
+.dash-filter-search {
+	position: relative;
+	flex: 1;
+	min-width: 180px;
+	max-width: 320px;
+	margin-left: auto;
+}
+.dash-filter-search input {
+	width: 100%;
+	box-sizing: border-box;
+	font-family: Inter, sans-serif;
+	font-size: 13px;
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-sm);
+	padding: 7px 12px 7px 32px;
+	transition: border-color var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out);
+}
+.dash-filter-search input:focus {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 18%, transparent);
+}
+.dash-filter-search svg {
+	position: absolute;
+	left: 10px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 13px;
+	height: 13px;
+	color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+	pointer-events: none;
+}
+
+/* ---- .dash-metric-strip: horizontal row of metric cards. ----- */
+.dash-metric-strip {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+.dash-metric-card {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: var(--space-4);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-md);
+	background: var(--color-base-200);
+	min-width: 0;
+}
+.dash-metric-label {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+	margin: 0;
+}
+.dash-metric-value {
+	font-family: 'Instrument Serif', Georgia, serif;
+	font-size: 28px;
+	font-weight: 500;
+	line-height: 1.05;
+	color: var(--color-base-content);
+	font-variant-numeric: tabular-nums;
+	margin: 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dash-metric-delta {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 11px;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	margin: 0;
+}
+.dash-metric-delta-up { color: var(--color-success); }
+.dash-metric-delta-down { color: var(--color-error); }
+
+/* Skeleton variant - inherits .dash-metric-card frame, shimmer fills. */
+.dash-metric-card.dash-metric-skeleton .dash-metric-label,
+.dash-metric-card.dash-metric-skeleton .dash-metric-value {
+	color: transparent;
+	background: linear-gradient(90deg,
+		var(--color-base-300) 25%,
+		color-mix(in oklab, var(--color-base-300) 50%, transparent) 50%,
+		var(--color-base-300) 75%);
+	background-size: 200% 100%;
+	animation: dash-shimmer 1.5s infinite;
+	border-radius: 4px;
+}
+.dash-metric-card.dash-metric-skeleton .dash-metric-label {
+	width: 48%;
+	height: 10px;
+}
+.dash-metric-card.dash-metric-skeleton .dash-metric-value {
+	width: 70%;
+	height: 24px;
+}
+
+/* ---- .dash-channel-bar: stacked horizontal segment bar. ------ */
+.dash-channel-bar {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-md);
+	background: var(--color-base-200);
+	margin-bottom: var(--space-5);
+}
+.dash-channel-bar-track {
+	display: flex;
+	width: 100%;
+	height: 10px;
+	border-radius: var(--radius-pill);
+	background: color-mix(in oklab, var(--color-base-300) 60%, transparent);
+	overflow: hidden;
+}
+.dash-channel-bar-segment {
+	height: 100%;
+	min-width: 2px;
+	transition: filter var(--motion-fast) var(--ease-out);
+}
+.dash-channel-bar-segment:hover {
+	filter: brightness(1.1);
+}
+.dash-channel-bar-segment + .dash-channel-bar-segment {
+	border-left: 1px solid color-mix(in oklab, var(--color-base-100) 40%, transparent);
+}
+.dash-channel-bar-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3) var(--space-4);
+}
+.dash-channel-bar-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11.5px;
+	color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+	font-variant-numeric: tabular-nums;
+}
+.dash-channel-bar-swatch {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	flex-shrink: 0;
+}
+.dash-channel-bar-label-name {
+	font-weight: 500;
+	color: var(--color-base-content);
+}
+.dash-channel-bar-label-count {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 11px;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+/* 8-color palette for segments, swatches share by index. */
+.dash-channel-bar-segment[data-channel-idx="0"], .dash-channel-bar-swatch[data-channel-idx="0"] { background: var(--color-primary); }
+.dash-channel-bar-segment[data-channel-idx="1"], .dash-channel-bar-swatch[data-channel-idx="1"] { background: var(--color-info); }
+.dash-channel-bar-segment[data-channel-idx="2"], .dash-channel-bar-swatch[data-channel-idx="2"] { background: var(--color-success); }
+.dash-channel-bar-segment[data-channel-idx="3"], .dash-channel-bar-swatch[data-channel-idx="3"] { background: var(--color-warning); }
+.dash-channel-bar-segment[data-channel-idx="4"], .dash-channel-bar-swatch[data-channel-idx="4"] { background: #a855f7; }
+.dash-channel-bar-segment[data-channel-idx="5"], .dash-channel-bar-swatch[data-channel-idx="5"] { background: #ec4899; }
+.dash-channel-bar-segment[data-channel-idx="6"], .dash-channel-bar-swatch[data-channel-idx="6"] { background: #0891b2; }
+.dash-channel-bar-segment[data-channel-idx="7"], .dash-channel-bar-swatch[data-channel-idx="7"] { background: #d97706; }
+
+/* ---- .dash-status-chip: generic status pill. ----------------- */
+.dash-status-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 10.5px;
+	font-weight: 500;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	padding: 3px 8px;
+	border-radius: var(--radius-pill);
+	background: color-mix(in oklab, var(--color-base-content) 7%, transparent);
+	color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
+	font-family: Inter, sans-serif;
+	white-space: nowrap;
+}
+.dash-status-chip::before {
+	content: '';
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: currentColor;
+	opacity: 0.85;
+	flex-shrink: 0;
+}
+.dash-status-chip-active {
+	background: color-mix(in oklab, var(--color-success) 14%, transparent);
+	color: var(--color-success);
+}
+.dash-status-chip-expired {
+	background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.dash-status-chip-error {
+	background: color-mix(in oklab, var(--color-error) 14%, transparent);
+	color: var(--color-error);
+}
+.dash-status-chip-paused {
+	background: color-mix(in oklab, var(--color-warning) 14%, transparent);
+	color: var(--color-warning);
+}
+.dash-status-chip-info {
+	background: color-mix(in oklab, var(--color-info) 14%, transparent);
+	color: var(--color-info);
+}
+
+/* ---- .dash-table: generic data table with sortable columns. -- */
+.dash-table-wrap {
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-md);
+	background: var(--color-base-200);
+	overflow: hidden;
+}
+.dash-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+.dash-table-head {
+	background: color-mix(in oklab, var(--color-base-100) 60%, var(--color-base-200));
+	border-bottom: 1px solid var(--color-base-300);
+}
+.dash-table-head-cell {
+	text-align: left;
+	padding: 10px 14px;
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	white-space: nowrap;
+	user-select: none;
+}
+.dash-table-head-cell[data-sortable="true"] {
+	cursor: pointer;
+	transition: color var(--motion-fast) var(--ease-out);
+}
+.dash-table-head-cell[data-sortable="true"]:hover {
+	color: var(--color-base-content);
+}
+.dash-table-head-cell[data-sort-active="true"] {
+	color: var(--color-primary);
+}
+.dash-table-sort-arrow {
+	display: inline-block;
+	margin-left: 4px;
+	font-size: 9px;
+	opacity: 0.8;
+}
+.dash-table-head-cell-numeric {
+	text-align: right;
+}
+.dash-table-row {
+	border-bottom: 1px solid color-mix(in oklab, var(--color-base-300) 55%, transparent);
+	transition: background-color var(--motion-fast) var(--ease-out);
+}
+.dash-table-row:last-child {
+	border-bottom: none;
+}
+.dash-table-row[data-clickable="true"] {
+	cursor: pointer;
+}
+.dash-table-row[data-clickable="true"]:hover {
+	background: color-mix(in oklab, var(--color-primary) 5%, transparent);
+}
+.dash-table-row:focus-visible {
+	outline: none;
+	background: color-mix(in oklab, var(--color-primary) 8%, transparent);
+	box-shadow: inset 3px 0 0 var(--color-primary);
+}
+.dash-table-cell {
+	padding: 11px 14px;
+	color: var(--color-base-content);
+	vertical-align: middle;
+}
+.dash-table-cell-numeric {
+	text-align: right;
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 12.5px;
+}
+.dash-table-cell-mono {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 12px;
+	color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+	min-width: 0;
+	max-width: 280px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dash-table-cell-muted {
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.dash-table-empty {
+	padding: var(--space-10) var(--space-5);
+	text-align: center;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	font-size: 13px;
+}
+.dash-table-skeleton-row td {
+	padding: 11px 14px;
+}
+.dash-table-skeleton-pill {
+	height: 12px;
+	border-radius: 6px;
+	background: linear-gradient(90deg,
+		var(--color-base-300) 25%,
+		color-mix(in oklab, var(--color-base-300) 50%, transparent) 50%,
+		var(--color-base-300) 75%);
+	background-size: 200% 100%;
+	animation: dash-shimmer 1.5s infinite;
+}
+
+/* Channel glyph + label cell (reused by Sessions channel column). */
+.dash-channel-glyph {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	color: var(--color-base-content);
+}
+.dash-channel-glyph-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+/* Mobile: table sheds lower-priority cells at 540px. */
+@media (max-width: 540px) {
+	.dash-table-hide-sm { display: none; }
+}
+
+/* ---- .dash-drawer: right-slide dialog. ----------------------- */
+@keyframes dash-drawer-in {
+	from { transform: translateX(100%); }
+	to { transform: translateX(0); }
+}
+@keyframes dash-drawer-backdrop-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+.dash-drawer-backdrop {
+	position: fixed;
+	inset: 0;
+	background: color-mix(in oklab, var(--color-base-100) 70%, transparent);
+	backdrop-filter: blur(4px);
+	-webkit-backdrop-filter: blur(4px);
+	z-index: 150;
+	animation: dash-drawer-backdrop-in var(--motion-base) var(--ease-reveal);
+}
+.dash-drawer {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(560px, 52vw);
+	background: var(--color-base-100);
+	border-left: 1px solid var(--color-base-300);
+	box-shadow: -20px 0 60px rgba(0, 0, 0, 0.12), -4px 0 16px rgba(0, 0, 0, 0.05);
+	z-index: 160;
+	display: flex;
+	flex-direction: column;
+	animation: dash-drawer-in var(--motion-slow) var(--ease-reveal);
+	will-change: transform;
+}
+@media (max-width: 720px) {
+	.dash-drawer {
+		width: 100%;
+		max-width: 100%;
+	}
+}
+.dash-drawer-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--space-4);
+	padding: var(--space-5) var(--space-5) var(--space-4);
+	border-bottom: 1px solid var(--color-base-300);
+	flex-shrink: 0;
+}
+.dash-drawer-title-wrap {
+	flex: 1;
+	min-width: 0;
+}
+.dash-drawer-eyebrow {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+	margin: 0 0 6px;
+}
+.dash-drawer-title {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 14px;
+	font-weight: 500;
+	margin: 0;
+	word-break: break-all;
+	line-height: 1.3;
+}
+.dash-drawer-subtitle {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	font-size: 12px;
+	color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+	flex-wrap: wrap;
+}
+.dash-drawer-close {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-sm);
+	background: var(--color-base-200);
+	color: var(--color-base-content);
+	cursor: pointer;
+	transition: border-color var(--motion-fast) var(--ease-out),
+		background-color var(--motion-fast) var(--ease-out);
+}
+.dash-drawer-close:hover {
+	border-color: color-mix(in oklab, var(--color-primary) 30%, var(--color-base-300));
+	background: color-mix(in oklab, var(--color-primary) 5%, var(--color-base-200));
+}
+.dash-drawer-close:focus-visible {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 18%, transparent);
+}
+.dash-drawer-close svg {
+	width: 16px;
+	height: 16px;
+}
+.dash-drawer-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: var(--space-5);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+}
+.dash-drawer-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.dash-drawer-section-label {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+	margin: 0;
+}
+.dash-drawer-kv {
+	display: grid;
+	grid-template-columns: minmax(120px, auto) 1fr;
+	gap: 8px 16px;
+	font-size: 12.5px;
+	line-height: 1.55;
+}
+.dash-drawer-kv-key {
+	font-size: 11px;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.dash-drawer-kv-value {
+	color: var(--color-base-content);
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 12px;
+	word-break: break-word;
+	min-width: 0;
+}
+.dash-drawer-kv-value-plain {
+	font-family: Inter, sans-serif;
+	font-size: 13px;
+}
+.dash-drawer-footer {
+	display: flex;
+	gap: var(--space-2);
+	align-items: center;
+	padding: var(--space-4) var(--space-5);
+	border-top: 1px solid var(--color-base-300);
+	background: var(--color-base-200);
+	flex-shrink: 0;
+}
+.dash-drawer-error {
+	padding: var(--space-4);
+	border: 1px solid color-mix(in oklab, var(--color-error) 40%, var(--color-base-300));
+	border-radius: var(--radius-md);
+	background: color-mix(in oklab, var(--color-error) 5%, transparent);
+	color: color-mix(in oklab, var(--color-error) 90%, var(--color-base-content));
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+/* Respect reduced motion: snap drawer in, skip shimmer. */
+@media (prefers-reduced-motion: reduce) {
+	.dash-drawer {
+		animation: none;
+	}
+	.dash-drawer-backdrop {
+		animation: none;
+	}
+	.dash-metric-card.dash-metric-skeleton .dash-metric-label,
+	.dash-metric-card.dash-metric-skeleton .dash-metric-value,
+	.dash-table-skeleton-pill {
+		animation: none;
+	}
+}

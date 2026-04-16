@@ -4,6 +4,27 @@
 // response to prevent email enumeration.
 
 import { createSession } from "../ui/session.ts";
+import { escapeHtml } from "./util/escape.ts";
+
+// Sanitize the agent name into an email from-address local-part.
+// PhantomConfigSchema already restricts `name` to a safe charset, but we
+// defend in depth: lowercase, collapse spaces/underscores/dots to hyphens,
+// strip anything that is not alphanumeric or hyphen, collapse runs of
+// hyphens, and trim leading/trailing hyphens. Falls back to "agent" if
+// the result is empty or shorter than 3 chars to keep Resend happy.
+export function sanitizeLocalPart(agentName: string): string {
+	const lowered = agentName.toLowerCase();
+	const collapsed = lowered.replace(/[\s_.]+/g, "-");
+	const stripped = collapsed.replace(/[^a-z0-9-]/g, "");
+	const normalized = stripped.replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+	return normalized.length >= 3 ? normalized : "agent";
+}
+
+// Strip CR/LF from header values to defend against header injection.
+// PhantomConfigSchema already rejects these at load, but be defensive.
+function sanitizeHeader(value: string): string {
+	return value.replace(/[\r\n]/g, "");
+}
 
 type RateLimitEntry = { lastSent: number };
 const rateLimitMap = new Map<string, RateLimitEntry>();
@@ -79,10 +100,13 @@ export async function sendLoginEmail(email: string, magicLink: string, agentName
 		const { Resend } = await import("resend");
 		const resend = new Resend(apiKey);
 		const domain = process.env.PHANTOM_EMAIL_DOMAIN ?? "ghostwright.dev";
-		const from = `${agentName} <${agentName.toLowerCase()}@${domain}>`;
+		const safeDisplayName = sanitizeHeader(agentName);
+		const safeLocalPart = sanitizeLocalPart(agentName);
+		const safeHtmlName = escapeHtml(agentName);
+		const from = `${safeDisplayName} <${safeLocalPart}@${domain}>`;
 
 		const htmlBody = `
-<p>Sign in to ${agentName}. Click the link below within 10 minutes:</p>
+<p>Sign in to ${safeHtmlName}. Click the link below within 10 minutes:</p>
 <p><a href="${magicLink}" style="display:inline-block;padding:12px 24px;background:#4850c4;color:#fff;text-decoration:none;border-radius:8px;">Sign in</a></p>
 <p style="color:#888;font-size:13px;">This link can be used once. Your session lasts 7 days.</p>
 <p style="color:#888;font-size:13px;">If you did not request this, you can ignore this email.</p>
@@ -91,9 +115,9 @@ export async function sendLoginEmail(email: string, magicLink: string, agentName
 		await resend.emails.send({
 			from,
 			to: [email],
-			subject: `${agentName} - Login link`,
+			subject: `${safeDisplayName} - Login link`,
 			html: htmlBody,
-			text: `Sign in to ${agentName}: ${magicLink}\n\nThis link expires in 10 minutes and can be used once.`,
+			text: `Sign in to ${safeDisplayName}: ${magicLink}\n\nThis link expires in 10 minutes and can be used once.`,
 		});
 
 		console.log(`[email-login] Sent login email to ${email}`);

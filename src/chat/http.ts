@@ -54,8 +54,17 @@ export function createChatHandler(deps: ChatHandlerDeps): (req: Request) => Prom
 			if (response) return response;
 		}
 
-		// Serve manifest and favicon without auth (browsers fetch these without credentials)
-		if (path === "/chat/manifest.webmanifest" || path === "/chat/favicon.svg") {
+		// Serve the manifest dynamically so the PWA name reflects the
+		// configured agent identity instead of the build-time "Phantom"
+		// literal. iOS reads `name` from the manifest when the
+		// `apple-mobile-web-app-title` meta is absent, so this is the
+		// only place that mutation reaches the home-screen label.
+		if (path === "/chat/manifest.webmanifest") {
+			return serveManifest(deps.agentName);
+		}
+
+		// Serve favicon without auth (browsers fetch it without credentials)
+		if (path === "/chat/favicon.svg") {
 			return handleChatStaticRequest(req);
 		}
 
@@ -250,4 +259,33 @@ async function handlePushTest(deps: ChatHandlerDeps): Promise<Response> {
 	const payload = testPayload(deps.agentName);
 	const result = await broadcastNotification(deps.db, payload, deps.vapidKeys, deps.ownerEmail);
 	return Response.json({ ok: true, sent: result.sent, failed: result.failed });
+}
+
+function serveManifest(agentName?: string): Response {
+	const name = agentName && agentName.length > 0 ? agentName : "Phantom";
+	const manifest = {
+		name,
+		short_name: name,
+		description: `${name} - AI co-worker`,
+		id: "/chat/",
+		start_url: "/chat/",
+		scope: "/chat/",
+		display: "standalone",
+		background_color: "#faf9f5",
+		theme_color: "#4850c4",
+		icons: [
+			{
+				src: "/chat/favicon.svg",
+				sizes: "any",
+				type: "image/svg+xml",
+				purpose: "any",
+			},
+		],
+	};
+	return new Response(JSON.stringify(manifest), {
+		headers: {
+			"Content-Type": "application/manifest+json; charset=utf-8",
+			"Cache-Control": "no-cache",
+		},
+	});
 }

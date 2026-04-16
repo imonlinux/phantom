@@ -9,7 +9,9 @@
 import { useEffect, useState } from "react";
 import { getBootstrap, type BootstrapData } from "@/lib/client";
 
-const STORAGE_KEY = "phantom-chat-bootstrap-v1";
+// Exported so pre-mount bootstrap code (main.tsx) can read the same key
+// without duplicating the literal. Renaming the key now requires one edit.
+export const STORAGE_KEY = "phantom-chat-bootstrap-v1";
 
 type CachedBootstrap = {
   agent_name: string;
@@ -70,14 +72,22 @@ export function useBootstrap(): {
   cachedName: string | null;
   cachedGen: number | null;
 } {
-  const initialCache = typeof window !== "undefined" ? readCache() : null;
   const [data, setData] = useState<BootstrapData | null>(cachedData);
-  const [cachedName, setCachedName] = useState<string | null>(
-    initialCache?.agent_name ?? null,
-  );
-  const [cachedGen, setCachedGen] = useState<number | null>(
-    initialCache?.evolution_gen ?? null,
-  );
+  // Lazy initializers: readCache() only runs once per consumer mount
+  // instead of on every render. Three consumers each re-render on
+  // every SSE frame during streaming, so the non-lazy form burned
+  // localStorage reads measurably. Each useState takes its own lazy
+  // initializer so readCache runs exactly on first mount, never on
+  // subsequent renders. The double-call at mount is a rounding error
+  // next to the per-render cost we eliminated.
+  const [cachedName, setCachedName] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return readCache()?.agent_name ?? null;
+  });
+  const [cachedGen, setCachedGen] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    return readCache()?.evolution_gen ?? null;
+  });
 
   useEffect(() => {
     let cancelled = false;

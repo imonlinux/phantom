@@ -42,7 +42,7 @@ These are configured automatically by the [app manifest](../slack-app-manifest.y
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `ANTHROPIC_API_KEY` | Yes | Claude Opus 4.6 API access |
+| `ANTHROPIC_API_KEY` | Yes | Claude Opus 4.7 API access |
 | `SLACK_BOT_TOKEN` | For Slack | Bot user OAuth token (`xoxb-`) |
 | `SLACK_APP_TOKEN` | For Slack | App-level token for Socket Mode (`xapp-`) |
 | `SLACK_CHANNEL_ID` | For Slack | Default channel for intro message on first start |
@@ -197,7 +197,7 @@ Phantom's security is defense-in-depth, with multiple independent layers:
 
 1. **Owner access control** - Only the configured owner can talk to the agent (Slack user ID filtering)
 2. **Constitution** - 8 immutable behavioral principles the agent cannot override
-3. **LLM safety judges** - Independent Sonnet 4.6 judges review evolution changes, triple-judge with minority veto
+3. **LLM safety judges** - Independent Sonnet judges review evolution changes, triple-judge with minority veto. Sonnet is the default cross-model judge since main runs on Opus; operators may opt into Opus judges explicitly.
 4. **Dangerous command blocker** - Regex patterns catch obvious destructive commands (not a security boundary)
 5. **Subprocess isolation** - Dynamic tools run in clean environments without secrets
 6. **MCP authentication** - Bearer tokens with scoped access (read/operator/admin)

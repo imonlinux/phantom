@@ -346,7 +346,7 @@ The core differentiator. After every session:
 5. **Apply** - write approved changes, bump version
 6. **Consolidate** - periodically compress observations into principles
 
-Safety-critical gates use Sonnet 4.6 as a cross-model judge. Triple-judge voting with minority veto: one dissenting judge blocks the change. Every version is stored. You can diff day 1 and day 30. You can roll back.
+Safety-critical gates use Sonnet as the default cross-model judge (main runs on Opus, so judges run on Sonnet to avoid self-enhancement bias). Operators may opt into Opus judges explicitly for deeper reasoning at higher cost. Triple-judge voting with minority veto: one dissenting judge blocks the change. Every version is stored. You can diff day 1 and day 30. You can roll back.
 
 ## The Ghostwright Ecosystem
 

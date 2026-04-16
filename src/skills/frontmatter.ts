@@ -117,8 +117,13 @@ export function parseFrontmatter(raw: string): ParseResult {
 
 export function serializeSkill(frontmatter: SkillFrontmatter, body: string): string {
 	const ordered: Record<string, unknown> = {};
+	// Keep x-phantom-source alongside name so the marker reads naturally at
+	// the top of the YAML block and survives a round trip through the UI
+	// PUT path. Without it in the list, every edit of a built-in skill
+	// silently dropped the marker and demoted the skill to user-authored.
 	const orderedKeys: Array<keyof SkillFrontmatter> = [
 		"name",
+		"x-phantom-source",
 		"description",
 		"when_to_use",
 		"allowed-tools",

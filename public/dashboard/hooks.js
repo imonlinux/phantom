@@ -89,18 +89,15 @@
 	function esc(s) { return ctx.esc(s); }
 
 	function blankDraft() {
+		// Defer to defaultDefinition so the blank-draft shape matches the
+		// shape produced after a type switch. Without this parity, flipping
+		// type=http then back to type=command produced a different key set
+		// than the initial snapshot, so the dirty checker fired on an
+		// otherwise no-op exploration.
 		return {
 			event: "PreToolUse",
 			matcher: "",
-			definition: {
-				type: "command",
-				command: "",
-				timeout: 30,
-				statusMessage: "",
-				once: false,
-				async: false,
-				asyncRewake: false,
-			},
+			definition: defaultDefinition("command"),
 		};
 	}
 
@@ -417,6 +414,12 @@
 		if (typeSel) typeSel.addEventListener("change", function () {
 			var newType = typeSel.value;
 			state.editing.draft.definition = defaultDefinition(newType);
+			// Reset the dirty baseline to the post-switch draft. Switching
+			// type is a deliberate schema change, not an unsaved edit; the
+			// operator has not typed anything meaningful yet. Without this
+			// reset the nav-confirm modal fires every time the operator
+			// explores the type dropdown.
+			state.editing.initialDraft = JSON.stringify(state.editing.draft);
 			render();
 		});
 		wireActionFields();

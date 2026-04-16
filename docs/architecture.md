@@ -140,7 +140,7 @@ For web chat specifically: the client sends `POST /chat/sessions/:id/message`, t
 | Component | Technology |
 |-----------|------------|
 | Runtime | Bun (TypeScript, no compilation) |
-| Agent | @anthropic-ai/claude-agent-sdk (Opus 4.6) |
+| Agent | @anthropic-ai/claude-agent-sdk (Opus 4.7) |
 | Vector DB | Qdrant (Docker) |
 | Embeddings | Ollama (nomic-embed-text) |
 | State DB | SQLite (Bun built-in) |

@@ -35,27 +35,35 @@ export function useAutoScroll(): {
       }
     };
 
-    // MutationObserver alone is enough: every new message is a direct
-    // child append and every delta update triggers a childList mutation.
-    // Previous double-observer (ResizeObserver + MutationObserver) caused
-    // two reflows per tick and visible jitter on slower devices.
+    // Both observers share one rAF slot so we coalesce container resize
+    // (mobile keyboard, sidebar toggle, rotation) and child mutations
+    // (streaming tokens, tool cards) into at most one scroll per frame.
+    // MutationObserver alone missed container-resize pins to bottom;
+    // ResizeObserver alone missed mid-stream delta updates. Sharing
+    // rafPending preserves the "two-reflows-per-tick" fix while
+    // restoring the resize responsiveness that got dropped.
     let rafPending = false;
-    const mutationObserver = new MutationObserver(() => {
-      if (!userScrolledRef.current && !rafPending) {
-        rafPending = true;
-        requestAnimationFrame(() => {
-          el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
-          rafPending = false;
-        });
-      }
-    });
+    const scheduleScroll = (): void => {
+      if (userScrolledRef.current || rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+        rafPending = false;
+      });
+    };
+
+    const mutationObserver = new MutationObserver(scheduleScroll);
     mutationObserver.observe(el, { childList: true, subtree: true });
+
+    const resizeObserver = new ResizeObserver(scheduleScroll);
+    resizeObserver.observe(el);
 
     el.addEventListener("scroll", handleScroll, { passive: true });
 
     return () => {
       el.removeEventListener("scroll", handleScroll);
       mutationObserver.disconnect();
+      resizeObserver.disconnect();
     };
   }, []);
 

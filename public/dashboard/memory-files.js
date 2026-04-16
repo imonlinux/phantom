@@ -309,7 +309,13 @@
 		var saveBtn = document.getElementById("memfile-save-btn");
 		if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving"; }
 		var path = state.currentFile.path;
-		ctx.api("PUT", "/ui/api/memory-files/" + encodeURIComponent(path), { content: body })
+		// HTML spec strips one leading newline from textarea initial value,
+		// so the browser never shows it and `body` here never contains it.
+		// Re-prepend if the on-disk baseline had one so the file survives
+		// a round trip without silent data loss on the first save.
+		var prefix = state.lastLoadedContent && state.lastLoadedContent.charAt(0) === "\n" ? "\n" : "";
+		var content = prefix + body;
+		ctx.api("PUT", "/ui/api/memory-files/" + encodeURIComponent(path), { content: content })
 			.then(function (res) {
 				state.currentFile = res.file;
 				state.lastLoadedContent = res.file.content;

@@ -42,7 +42,7 @@ This is the most important architectural principle in Phantom. If you read one s
 
 **TypeScript is plumbing. The Agent SDK is the brain.**
 
-Phantom wraps the Claude Agent SDK (Opus 4.6) with full computer access: filesystem, shell, Docker, network, and web search. The agent can read code, understand natural language, detect tech stacks, clone repos, and reason about anything.
+Phantom wraps the Claude Agent SDK (Opus 4.7) with full computer access: filesystem, shell, Docker, network, and web search. The agent can read code, understand natural language, detect tech stacks, clone repos, and reason about anything.
 
 TypeScript handles the mechanical, deterministic parts: starting processes, routing messages, managing sessions, storing data, serving HTTP endpoints, tracking state. Things that need to be fast, predictable, and always-on.
 

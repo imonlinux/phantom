@@ -229,16 +229,22 @@ document.getElementById('footer-time').textContent=new Date().toISOString();
       var roleName = data && data.role ? (data.role.name || data.role.id || "") : "";
       roleEl.textContent = roleName ? roleName + " role" : "-";
     }
-    if (badge && data && data.status) {
-      if (data.status === "ok") {
+    if (badge) {
+      if (data && data.status === "ok") {
         badge.className = "phantom-badge phantom-badge-success";
         badge.innerHTML = '<span class="phantom-dot phantom-dot-live"></span> online';
-      } else if (data.status === "degraded") {
+      } else if (data && data.status === "degraded") {
         badge.className = "phantom-badge";
         badge.innerHTML = '<span class="phantom-dot"></span> degraded';
-      } else {
+      } else if (data && data.status) {
         badge.className = "phantom-badge";
         badge.innerHTML = '<span class="phantom-dot"></span> ' + data.status;
+      } else {
+        // /health failed or returned no status. Reset to a neutral
+        // "unknown" state rather than leaving the initial "online"
+        // badge pinned on a page that cannot reach the agent.
+        badge.className = "phantom-badge";
+        badge.innerHTML = '<span class="phantom-dot"></span> unknown';
       }
     }
   }

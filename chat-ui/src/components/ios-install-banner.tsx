@@ -3,6 +3,7 @@
 // localStorage persistence (7 days).
 
 import { useCallback, useState } from "react";
+import { useBootstrap } from "@/hooks/use-bootstrap";
 import { Button } from "@/ui/button";
 
 const DISMISS_KEY = "phantom_ios_install_dismissed_at";
@@ -39,6 +40,8 @@ function isDismissed(): boolean {
 
 export function IosInstallBanner() {
   const [dismissed, setDismissed] = useState(isDismissed);
+  const { data, cachedName } = useBootstrap();
+  const agentName = data?.agent_name ?? cachedName ?? "this app";
 
   const handleDismiss = useCallback(() => {
     try {
@@ -56,7 +59,7 @@ export function IosInstallBanner() {
   return (
     <div className="mx-auto mb-3 flex w-full max-w-2xl items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
       <p className="flex-1 text-sm text-muted-foreground">
-        Install Phantom to your home screen for notifications. Tap{" "}
+        Install {agentName} to your home screen for notifications. Tap{" "}
         <svg
           className="inline-block h-4 w-4 align-text-bottom"
           viewBox="0 0 24 24"

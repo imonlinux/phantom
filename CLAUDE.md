@@ -105,7 +105,7 @@ src/
     reflection.ts       # Post-session observation extraction
     validation.ts       # 5-gate validation (constitution, regression, size, drift, safety)
     versioning.ts       # Git-like config versioning with rollback
-    judges/             # LLM judges (Sonnet 4.6 as judge model)
+    judge-models.ts     # Sonnet is the default judge; Opus is opt-in
   mcp/
     server.ts           # MCP Streamable HTTP server
     tools-universal.ts  # 8 universal MCP tools
@@ -158,7 +158,7 @@ MCP flow: External client -> /mcp endpoint -> bearer auth -> MCP Server -> tool 
 
 **Qdrant over LanceDB:** WAL durability with crash recovery. Native hybrid search (dense + BM25 sparse vectors). Named vectors for separate embedding spaces. Mmap mode for low memory. TypeScript REST client works with Bun (no NAPI addon risk).
 
-**Sonnet as judge model:** Cross-model evaluation avoids self-enhancement bias. Opus judging its own output creates a conflict of interest. Safety/constitution gates use triple-judge minority veto (one dissent blocks the change).
+**Sonnet as default judge model:** The evolution pipeline uses Sonnet as the default judge model for safety-critical gates. Cross-model evaluation avoids self-enhancement bias: the main agent runs on Opus, so judges run on Sonnet. Operators may opt into Opus judges for deeper reasoning at higher cost. Safety/constitution gates use triple-judge minority veto (one dissent blocks the change).
 
 **Factory pattern for MCP servers:** The SDK connects each MCP server instance to one transport and rejects reuse. In-process MCP servers must be recreated per query() call. The registries they wrap are singletons, but the MCP server wrapper is new each time.
 

@@ -126,6 +126,63 @@ describe("serializeSkill", () => {
 		expect(reparsed.parsed.frontmatter.name).toBe("mirror");
 		expect(reparsed.parsed.body.startsWith("# Mirror")).toBe(true);
 	});
+
+	test("preserves x-phantom-source: built-in across a round trip", () => {
+		const raw = `---
+name: mirror
+x-phantom-source: built-in
+description: weekly self-audit
+when_to_use: Use on Friday evening.
+---
+
+# Mirror
+body
+`;
+		const parsed = parseFrontmatter(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const serialized = serializeSkill(parsed.parsed.frontmatter, parsed.parsed.body);
+		expect(serialized).toContain("x-phantom-source: built-in");
+		const reparsed = parseFrontmatter(serialized);
+		expect(reparsed.ok).toBe(true);
+		if (!reparsed.ok) return;
+		expect(reparsed.parsed.frontmatter["x-phantom-source"]).toBe("built-in");
+	});
+
+	test("preserves x-phantom-source: user across a round trip", () => {
+		const raw = `---
+name: mirror
+x-phantom-source: user
+description: weekly self-audit
+when_to_use: Use on Friday evening.
+---
+
+# Mirror
+body
+`;
+		const parsed = parseFrontmatter(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const serialized = serializeSkill(parsed.parsed.frontmatter, parsed.parsed.body);
+		expect(serialized).toContain("x-phantom-source: user");
+		const reparsed = parseFrontmatter(serialized);
+		expect(reparsed.ok).toBe(true);
+		if (!reparsed.ok) return;
+		expect(reparsed.parsed.frontmatter["x-phantom-source"]).toBe("user");
+	});
+
+	test("does not crash when frontmatter omits x-phantom-source", () => {
+		const parsed = parseFrontmatter(validRaw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		// Strip any marker explicitly so we exercise the undefined branch
+		const fmWithoutMarker = { ...parsed.parsed.frontmatter };
+		Reflect.deleteProperty(fmWithoutMarker, "x-phantom-source");
+		const serialized = serializeSkill(fmWithoutMarker, parsed.parsed.body);
+		expect(serialized).not.toContain("x-phantom-source");
+		const reparsed = parseFrontmatter(serialized);
+		expect(reparsed.ok).toBe(true);
+	});
 });
 
 describe("getBodyByteLength and isBodyWithinLimit", () => {

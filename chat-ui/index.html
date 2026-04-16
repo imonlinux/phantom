@@ -10,7 +10,14 @@
     <link rel="apple-touch-icon" href="/chat/favicon.svg" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="Phantom" />
+    <!--
+      apple-mobile-web-app-title is intentionally omitted so iOS falls
+      back to the manifest's `name`, which the server generates from
+      the configured agent identity. Setting a static value here would
+      bake "Phantom" into the iOS home-screen icon at Add-to-Home-Screen
+      time and JS cannot update it after iOS caches it. Existing iOS
+      installs keep the old label until reinstalled.
+    -->
     <meta name="theme-color" content="#4850c4" />
     <link
       rel="preload"

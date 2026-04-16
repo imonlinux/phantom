@@ -1,4 +1,4 @@
-// Teaches the main agent (Opus 4.6) to write its own learnings into a single
+// Teaches the main agent (Opus 4.7) to write its own learnings into a single
 // canonical file at phantom-config/memory/agent-notes.md via the Write or
 // Edit tool. Research across three VMs (108 lifetime sessions, 117 applied
 // evolution deltas) showed the agent memory audit log has two rows lifetime,

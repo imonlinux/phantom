@@ -2089,17 +2089,156 @@ body {
 	line-height: 1.5;
 }
 
+/* ---- .dash-chart: generic SVG chart primitive. Used by Cost for the
+   stacked bar; Evolution reuses it as a sparkline. Series fills come
+   from [data-series-idx] below so dark/light themes track automatically. */
+.dash-chart {
+	position: relative;
+	padding: var(--space-4);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-md);
+	background: var(--color-base-200);
+	margin-bottom: var(--space-5);
+}
+.dash-chart-header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+}
+.dash-chart-title { font-size: 13px; font-weight: 600; margin: 0; }
+.dash-chart-scroll { overflow-x: auto; overflow-y: hidden; }
+.dash-chart-svg {
+	display: block;
+	width: 100%;
+	min-width: 320px;
+	height: auto;
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.dash-chart-axis { stroke: color-mix(in oklab, var(--color-base-content) 22%, transparent); stroke-width: 1; }
+.dash-chart-gridline {
+	stroke: color-mix(in oklab, var(--color-base-content) 10%, transparent);
+	stroke-width: 1;
+	stroke-dasharray: 2 3;
+}
+.dash-chart-tick-label { fill: color-mix(in oklab, var(--color-base-content) 55%, transparent); font-size: 10px; }
+.dash-chart-bar { cursor: pointer; transition: filter var(--motion-fast) var(--ease-out); }
+.dash-chart-bar:hover { filter: brightness(1.15); }
+.dash-chart-tooltip {
+	position: absolute;
+	background: var(--color-base-content);
+	color: var(--color-base-100);
+	font-family: Inter, system-ui, sans-serif;
+	font-size: 11.5px;
+	line-height: 1.45;
+	padding: 8px 10px;
+	border-radius: var(--radius-sm);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+	pointer-events: none;
+	opacity: 0;
+	transform: translate(-50%, calc(-100% - 8px));
+	transition: opacity var(--motion-fast) var(--ease-out);
+	white-space: nowrap;
+	z-index: 5;
+	max-width: 280px;
+}
+.dash-chart-tooltip[data-visible="true"] { opacity: 1; }
+.dash-chart-tooltip-title { font-weight: 600; margin: 0 0 4px; font-size: 11px; letter-spacing: 0.02em; }
+.dash-chart-tooltip-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.dash-chart-tooltip-swatch, .dash-breakdown-swatch {
+	width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+}
+.dash-chart-tooltip-swatch { width: 8px; height: 8px; }
+.dash-chart-tooltip-total {
+	margin-top: 4px; padding-top: 4px; font-weight: 600;
+	border-top: 1px solid color-mix(in oklab, var(--color-base-100) 25%, transparent);
+}
+.dash-chart-empty {
+	padding: var(--space-8) var(--space-5);
+	text-align: center;
+	color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	font-size: 12.5px;
+}
+.dash-chart-skeleton {
+	height: 240px;
+	border-radius: var(--radius-sm);
+	background: linear-gradient(90deg,
+		var(--color-base-300) 25%,
+		color-mix(in oklab, var(--color-base-300) 50%, transparent) 50%,
+		var(--color-base-300) 75%);
+	background-size: 200% 100%;
+	animation: dash-shimmer 1.5s infinite;
+}
+.dash-breakdown-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: var(--space-4);
+	margin-bottom: var(--space-5);
+}
+@media (max-width: 860px) {
+	.dash-breakdown-grid { grid-template-columns: 1fr; }
+}
+.dash-breakdown-swatch {
+	display: inline-block;
+	margin-right: 8px;
+	vertical-align: middle;
+}
+
+/* Segmented control for compact on/off toggles (e.g. Day | Week). */
+.dash-segmented {
+	display: inline-flex;
+	background: var(--color-base-100);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-sm);
+	padding: 2px;
+	gap: 2px;
+}
+.dash-segmented button {
+	font: 500 12px Inter, system-ui, sans-serif;
+	color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
+	background: transparent;
+	border: 0;
+	padding: 5px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+.dash-segmented button:hover { color: var(--color-base-content); }
+.dash-segmented button[aria-pressed="true"] {
+	background: var(--color-base-200);
+	color: var(--color-base-content);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.dash-segmented button:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 25%, transparent);
+}
+
+/* Series palette: shared by SVG bars, tooltip dots, breakdown swatches. */
+[data-series-idx="0"].dash-chart-bar { fill: var(--color-primary); }
+[data-series-idx="1"].dash-chart-bar { fill: var(--color-info); }
+[data-series-idx="2"].dash-chart-bar { fill: var(--color-success); }
+[data-series-idx="3"].dash-chart-bar { fill: var(--color-warning); }
+[data-series-idx="4"].dash-chart-bar { fill: #a855f7; }
+[data-series-idx="5"].dash-chart-bar { fill: #ec4899; }
+[data-series-idx="6"].dash-chart-bar { fill: #0891b2; }
+[data-series-idx="7"].dash-chart-bar { fill: #d97706; }
+[data-series-idx="0"].dash-chart-tooltip-swatch, [data-series-idx="0"].dash-breakdown-swatch { background: var(--color-primary); }
+[data-series-idx="1"].dash-chart-tooltip-swatch, [data-series-idx="1"].dash-breakdown-swatch { background: var(--color-info); }
+[data-series-idx="2"].dash-chart-tooltip-swatch, [data-series-idx="2"].dash-breakdown-swatch { background: var(--color-success); }
+[data-series-idx="3"].dash-chart-tooltip-swatch, [data-series-idx="3"].dash-breakdown-swatch { background: var(--color-warning); }
+[data-series-idx="4"].dash-chart-tooltip-swatch, [data-series-idx="4"].dash-breakdown-swatch { background: #a855f7; }
+[data-series-idx="5"].dash-chart-tooltip-swatch, [data-series-idx="5"].dash-breakdown-swatch { background: #ec4899; }
+[data-series-idx="6"].dash-chart-tooltip-swatch, [data-series-idx="6"].dash-breakdown-swatch { background: #0891b2; }
+[data-series-idx="7"].dash-chart-tooltip-swatch, [data-series-idx="7"].dash-breakdown-swatch { background: #d97706; }
+
 /* Respect reduced motion: snap drawer in, skip shimmer. */
 @media (prefers-reduced-motion: reduce) {
-	.dash-drawer {
-		animation: none;
-	}
-	.dash-drawer-backdrop {
-		animation: none;
-	}
+	.dash-drawer, .dash-drawer-backdrop { animation: none; }
 	.dash-metric-card.dash-metric-skeleton .dash-metric-label,
 	.dash-metric-card.dash-metric-skeleton .dash-metric-value,
-	.dash-table-skeleton-pill {
-		animation: none;
-	}
+	.dash-table-skeleton-pill,
+	.dash-chart-skeleton { animation: none; }
+	.dash-chart-bar, .dash-chart-tooltip { transition: none; }
 }

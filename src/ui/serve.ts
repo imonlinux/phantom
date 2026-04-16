@@ -7,6 +7,7 @@ import { consumeMagicLink, createSession, isValidSession } from "./session.ts";
 
 import { secretsExpiredHtml, secretsFormHtml } from "../secrets/form-page.ts";
 import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/store.ts";
+import { handleCostApi } from "./api/cost.ts";
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
@@ -219,6 +220,13 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
 		}
 		const apiResponse = await handleSessionsApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/cost")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleCostApi(req, url, { db: dashboardDb });
 		if (apiResponse) return apiResponse;
 	}
 

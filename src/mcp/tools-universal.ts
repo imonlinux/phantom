@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getCostForPeriod } from "../agent/cost-queries.ts";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolutionEngine } from "../evolution/engine.ts";
@@ -149,17 +150,13 @@ function registerPhantomMetrics(server: McpServer, deps: ToolDependencies): void
 							? "date('now', '-30 days')"
 							: "date('1970-01-01')";
 
-			const costRow = deps.db
-				.query(
-					`SELECT COALESCE(SUM(cost_usd), 0) as total, COUNT(*) as count FROM cost_events WHERE created_at >= ${dateFilter}`,
-				)
-				.get() as { total: number; count: number } | null;
+			const costRow = getCostForPeriod(deps.db, dateFilter);
 
 			const result = {
 				totalTasks: metrics?.session_count ?? 0,
 				successRate: metrics ? +(metrics.success_rate_7d * 100).toFixed(1) : 0,
-				avgCost: costRow && costRow.count > 0 ? +(costRow.total / costRow.count).toFixed(4) : 0,
-				totalCost: +(costRow?.total ?? 0).toFixed(4),
+				avgCost: costRow.events > 0 ? +(costRow.total / costRow.events).toFixed(4) : 0,
+				totalCost: +costRow.total.toFixed(4),
 				evolutionGeneration: deps.evolution?.getCurrentVersion() ?? 0,
 				evolutionCount: metrics?.evolution_count ?? 0,
 				rollbackCount: 0,

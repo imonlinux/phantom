@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { getCostForPeriod } from "../agent/cost-queries.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolutionEngine } from "../evolution/engine.ts";
 import type { MemorySystem } from "../memory/system.ts";
@@ -254,17 +255,13 @@ function registerMetricsCostResource(server: McpServer, deps: ResourceDependenci
 			const dateFilter =
 				period === "today" ? "date('now')" : period === "week" ? "date('now', '-7 days')" : "date('now', '-30 days')";
 
-			const row = deps.db
-				.query(
-					`SELECT COALESCE(SUM(cost_usd), 0) as total, COUNT(*) as events FROM cost_events WHERE created_at >= ${dateFilter}`,
-				)
-				.get() as { total: number; events: number };
+			const { total, events } = getCostForPeriod(deps.db, dateFilter);
 
 			return {
 				contents: [
 					{
 						uri: uri.href,
-						text: JSON.stringify({ period, totalCost: row.total, events: row.events }, null, 2),
+						text: JSON.stringify({ period, totalCost: total, events }, null, 2),
 					},
 				],
 			};

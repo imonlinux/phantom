@@ -2112,7 +2112,10 @@ body {
 .dash-chart-svg {
 	display: block;
 	width: 100%;
-	min-width: 320px;
+	/* Floor at 540px so narrow viewports trigger the .dash-chart-scroll
+	   horizontal scroll instead of squashing the bars and tick labels via
+	   preserveAspectRatio="none". */
+	min-width: 540px;
 	height: auto;
 	font-family: 'JetBrains Mono', ui-monospace, monospace;
 }

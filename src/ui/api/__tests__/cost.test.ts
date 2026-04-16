@@ -263,14 +263,14 @@ describe("cost API", () => {
 		expect(chat?.avg_per_session).toBeCloseTo(5.0, 6);
 	});
 
-	test("top_sessions limits to 10 and orders by total_cost_usd DESC", async () => {
+	test("top_sessions limits to 10 and orders by summed cost_events DESC", async () => {
 		for (let i = 0; i < 15; i++) {
 			seedSession(db, {
 				session_key: `k${i}`,
 				channel_id: "slack",
 				conversation_id: `cv${i}`,
-				total_cost_usd: (15 - i) * 0.5,
 			});
+			seedCostEvent(db, { session_key: `k${i}`, cost_usd: (15 - i) * 0.5 });
 		}
 
 		const res = await handleUiRequest(req("/ui/api/cost?days=all"));
@@ -281,6 +281,24 @@ describe("cost API", () => {
 		for (let i = 1; i < body.top_sessions.length; i++) {
 			expect(body.top_sessions[i].total_cost_usd).toBeLessThanOrEqual(body.top_sessions[i - 1].total_cost_usd);
 		}
+	});
+
+	test("top_sessions ranks by in-window spend, not lifetime", async () => {
+		// Session A: $50 lifetime, but only $5 in last 7 days.
+		seedSession(db, { session_key: "old-whale", channel_id: "slack", conversation_id: "cw" });
+		seedCostEvent(db, { session_key: "old-whale", cost_usd: 45.0, created_at: daysAgo(40) });
+		seedCostEvent(db, { session_key: "old-whale", cost_usd: 5.0, created_at: daysAgo(2) });
+
+		// Session B: $10 all from this week.
+		seedSession(db, { session_key: "fresh", channel_id: "slack", conversation_id: "cf" });
+		seedCostEvent(db, { session_key: "fresh", cost_usd: 10.0, created_at: daysAgo(1) });
+
+		const res = await handleUiRequest(req("/ui/api/cost?days=7"));
+		const body = (await res.json()) as CostResponse;
+		expect(body.top_sessions[0].session_key).toBe("fresh");
+		expect(body.top_sessions[0].total_cost_usd).toBeCloseTo(10.0, 6);
+		expect(body.top_sessions[1].session_key).toBe("old-whale");
+		expect(body.top_sessions[1].total_cost_usd).toBeCloseTo(5.0, 6);
 	});
 
 	test("range param filters daily, by_model, by_channel to window", async () => {

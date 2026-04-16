@@ -170,15 +170,23 @@ export function getByChannel(db: Database, days: number | null): ByChannelRow[] 
 }
 
 export function getTopSessions(db: Database, limit: number, days: number | null): TopSessionRow[] {
-	const where = days === null ? "" : "WHERE s.last_active_at >= datetime('now', ?)";
+	// Sum cost_events within the chosen window so the table reflects spend in
+	// the active range, not lifetime totals. Sessions with large historical
+	// cost but no recent activity correctly drop out of short-window views.
+	const where = days === null ? "" : "WHERE ce.created_at >= datetime('now', ?)";
 	const params: Array<string | number> = days === null ? [] : [`-${days} days`];
 
 	return db
 		.query(
 			`SELECT s.session_key, s.channel_id, s.conversation_id,
-			        s.total_cost_usd, s.turn_count, s.last_active_at
-			 FROM sessions s ${where}
-			 ORDER BY s.total_cost_usd DESC, s.last_active_at DESC LIMIT ?`,
+			        COALESCE(SUM(ce.cost_usd), 0) AS total_cost_usd,
+			        s.turn_count, s.last_active_at
+			 FROM cost_events ce
+			 JOIN sessions s ON ce.session_key = s.session_key
+			 ${where}
+			 GROUP BY s.session_key, s.channel_id, s.conversation_id, s.turn_count, s.last_active_at
+			 ORDER BY total_cost_usd DESC, s.last_active_at DESC
+			 LIMIT ?`,
 		)
 		.all(...params, limit) as TopSessionRow[];
 }

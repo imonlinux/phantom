@@ -19,9 +19,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     useSessions();
   const { toggleTheme } = useTheme();
   const isMobile = useIsMobile();
-  const { data: bootstrap, cachedName } = useBootstrap();
+  const { data: bootstrap, cachedName, cachedAvatarUrl } = useBootstrap();
 
   const agentName = bootstrap?.agent_name ?? cachedName ?? "Agent";
+  const avatarUrl = bootstrap?.avatar_url ?? cachedAvatarUrl ?? null;
+  const [avatarBroken, setAvatarBroken] = useState(false);
 
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -49,6 +51,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {});
   }, [agentName]);
+
+  // Mirror the avatar URL into the Service Worker so push notifications
+  // render the operator's logo. Null unsets any cached icon.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        reg.active?.postMessage({ type: "SET_AVATAR_URL", url: avatarUrl });
+      })
+      .catch(() => {});
+  }, [avatarUrl]);
+
+  // Reset the broken flag when the URL changes (new upload -> retry display).
+  useEffect(() => {
+    setAvatarBroken(false);
+  }, [avatarUrl]);
 
   const handleNewSession = useCallback(async () => {
     const id = await createSession();
@@ -152,6 +170,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             <PanelLeft className="h-4 w-4" />
           </button>
+          {avatarUrl && !avatarBroken ? (
+            <img
+              src={avatarUrl}
+              alt=""
+              className="mr-2 h-5 w-5 rounded-md object-cover"
+              onError={() => setAvatarBroken(true)}
+            />
+          ) : null}
           <span className="text-sm font-medium text-foreground">
             {agentName}
           </span>

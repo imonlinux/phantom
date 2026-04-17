@@ -142,9 +142,7 @@ async function deleteAvatar(opts: { cookie?: boolean } = {}): Promise<Response> 
 }
 
 async function getAvatar(extra: Record<string, string> = {}): Promise<Response> {
-	return handleUiRequest(
-		new Request("http://localhost/ui/avatar", { method: "GET", headers: publicHeaders(extra) }),
-	);
+	return handleUiRequest(new Request("http://localhost/ui/avatar", { method: "GET", headers: publicHeaders(extra) }));
 }
 
 describe("identity avatar API", () => {

@@ -4,6 +4,7 @@
 export type BootstrapData = {
   agent_name: string;
   evolution_gen: number;
+  avatar_url: string | null;
   memory_count: number;
   slack_status: string;
   scheduled_jobs_count: number;

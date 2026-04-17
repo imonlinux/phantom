@@ -11,11 +11,14 @@ import { getBootstrap, type BootstrapData } from "@/lib/client";
 
 // Exported so pre-mount bootstrap code (main.tsx) can read the same key
 // without duplicating the literal. Renaming the key now requires one edit.
-export const STORAGE_KEY = "phantom-chat-bootstrap-v1";
+// v2 bump: adds avatar_url to the cached shape so warm loads paint the
+// brand immediately instead of flashing the letter badge.
+export const STORAGE_KEY = "phantom-chat-bootstrap-v2";
 
 type CachedBootstrap = {
   agent_name: string;
   evolution_gen: number;
+  avatar_url: string | null;
 };
 
 let inFlightPromise: Promise<BootstrapData> | null = null;
@@ -45,6 +48,7 @@ function writeCache(data: BootstrapData): void {
     const minimal: CachedBootstrap = {
       agent_name: data.agent_name,
       evolution_gen: data.evolution_gen,
+      avatar_url: data.avatar_url ?? null,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
   } catch {
@@ -71,6 +75,7 @@ export function useBootstrap(): {
   data: BootstrapData | null;
   cachedName: string | null;
   cachedGen: number | null;
+  cachedAvatarUrl: string | null;
 } {
   const [data, setData] = useState<BootstrapData | null>(cachedData);
   // Lazy initializers: readCache() only runs once per consumer mount
@@ -88,6 +93,10 @@ export function useBootstrap(): {
     if (typeof window === "undefined") return null;
     return readCache()?.evolution_gen ?? null;
   });
+  const [cachedAvatarUrl, setCachedAvatarUrl] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return readCache()?.avatar_url ?? null;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +106,7 @@ export function useBootstrap(): {
         setData(next);
         setCachedName(next.agent_name);
         setCachedGen(next.evolution_gen);
+        setCachedAvatarUrl(next.avatar_url ?? null);
       })
       .catch(() => {});
     return () => {
@@ -104,7 +114,7 @@ export function useBootstrap(): {
     };
   }, []);
 
-  return { data, cachedName, cachedGen };
+  return { data, cachedName, cachedGen, cachedAvatarUrl };
 }
 
 // Non-hook accessor for consumers that already hold data and want the

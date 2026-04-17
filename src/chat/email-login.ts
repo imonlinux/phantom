@@ -34,7 +34,12 @@ export function clearRateLimits(): void {
 	rateLimitMap.clear();
 }
 
-export async function handleEmailLogin(req: Request, publicUrl: string, agentName: string): Promise<Response> {
+export async function handleEmailLogin(
+	req: Request,
+	publicUrl: string,
+	agentName: string,
+	domain: string,
+): Promise<Response> {
 	const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 
 	// Rate limit check
@@ -75,7 +80,7 @@ export async function handleEmailLogin(req: Request, publicUrl: string, agentNam
 	const { magicToken } = createSession();
 	const magicUrl = `${publicUrl}/ui/login?magic=${encodeURIComponent(magicToken)}&redirect=%2Fchat`;
 
-	await sendLoginEmail(ownerEmail, magicUrl, agentName);
+	await sendLoginEmail(ownerEmail, magicUrl, agentName, domain);
 
 	// Evict expired entries to prevent unbounded map growth
 	if (rateLimitMap.size > 1000) {
@@ -88,7 +93,12 @@ export async function handleEmailLogin(req: Request, publicUrl: string, agentNam
 	return Response.json({ ok: true });
 }
 
-export async function sendLoginEmail(email: string, magicLink: string, agentName: string): Promise<void> {
+export async function sendLoginEmail(
+	email: string,
+	magicLink: string,
+	agentName: string,
+	domain: string,
+): Promise<void> {
 	const apiKey = process.env.RESEND_API_KEY;
 	if (!apiKey) {
 		console.log(`[email-login] No RESEND_API_KEY set. Magic link for ${email}:`);
@@ -99,7 +109,6 @@ export async function sendLoginEmail(email: string, magicLink: string, agentName
 	try {
 		const { Resend } = await import("resend");
 		const resend = new Resend(apiKey);
-		const domain = process.env.PHANTOM_EMAIL_DOMAIN ?? "ghostwright.dev";
 		const safeDisplayName = sanitizeHeader(agentName);
 		const safeLocalPart = sanitizeLocalPart(agentName);
 		const safeHtmlName = escapeHtml(agentName);
@@ -112,13 +121,17 @@ export async function sendLoginEmail(email: string, magicLink: string, agentName
 <p style="color:#888;font-size:13px;">If you did not request this, you can ignore this email.</p>
 `.trim();
 
-		await resend.emails.send({
+		const { error } = await resend.emails.send({
 			from,
 			to: [email],
 			subject: `${safeDisplayName} - Login link`,
 			html: htmlBody,
 			text: `Sign in to ${safeDisplayName}: ${magicLink}\n\nThis link expires in 10 minutes and can be used once.`,
 		});
+
+		if (error) {
+			throw new Error(`Resend API error: ${error.message}`);
+		}
 
 		console.log(`[email-login] Sent login email to ${email}`);
 	} catch (err: unknown) {

@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { revokeAllSessions } from "../../ui/session.ts";
-import { clearRateLimits, handleEmailLogin, sanitizeLocalPart } from "../email-login.ts";
+import { clearRateLimits, handleEmailLogin, sanitizeLocalPart, sendLoginEmail } from "../email-login.ts";
 import { escapeHtml } from "../util/escape.ts";
 
 const originalEnv = { ...process.env };
@@ -15,6 +15,7 @@ afterEach(() => {
 	clearRateLimits();
 	process.env.OWNER_EMAIL = originalEnv.OWNER_EMAIL;
 	process.env.RESEND_API_KEY = originalEnv.RESEND_API_KEY;
+	process.env.PHANTOM_DOMAIN = originalEnv.PHANTOM_DOMAIN;
 });
 
 function makeRequest(body: Record<string, unknown>, ip = "127.0.0.1"): Request {
@@ -150,5 +151,41 @@ describe("escapeHtml", () => {
 	test("leaves safe text unchanged", () => {
 		expect(escapeHtml("Phantom")).toBe("Phantom");
 		expect(escapeHtml("my-agent")).toBe("my-agent");
+	});
+});
+
+describe("sendLoginEmail", () => {
+	test("throws when Resend API returns an error response", async () => {
+		mock.module("resend", () => ({
+			Resend: class {
+				emails = {
+					send: async () => ({ error: { message: "domain not verified" } }),
+				};
+			},
+		}));
+		process.env.RESEND_API_KEY = "re_test_key";
+
+		await expect(sendLoginEmail("owner@example.com", "http://localhost/magic", "Phantom")).rejects.toThrow(
+			"Resend API error: domain not verified",
+		);
+	});
+
+	test("uses PHANTOM_DOMAIN env var for the sender domain", async () => {
+		let capturedFrom = "";
+		mock.module("resend", () => ({
+			Resend: class {
+				emails = {
+					send: async (opts: { from: string }) => {
+						capturedFrom = opts.from;
+						return { data: { id: "ok" }, error: null };
+					},
+				};
+			},
+		}));
+		process.env.RESEND_API_KEY = "re_test_key";
+		process.env.PHANTOM_DOMAIN = "mycompany.com";
+
+		await sendLoginEmail("owner@example.com", "http://localhost/magic", "Phantom");
+		expect(capturedFrom).toContain("mycompany.com");
 	});
 });

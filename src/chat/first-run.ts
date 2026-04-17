@@ -24,7 +24,10 @@ function ensureFirstRunRow(db: Database): void {
 	db.run("INSERT OR IGNORE INTO first_run_state (id) VALUES (1)");
 }
 
-export async function handleFirstRun(db: Database, config: { name: string; public_url?: string }): Promise<void> {
+export async function handleFirstRun(
+	db: Database,
+	config: { name: string; public_url?: string; domain?: string },
+): Promise<void> {
 	const ownerEmail = process.env.OWNER_EMAIL;
 	if (!ownerEmail) {
 		console.warn("[first-run] No OWNER_EMAIL set and no Slack configured.");
@@ -53,7 +56,7 @@ export async function handleFirstRun(db: Database, config: { name: string; publi
 		db.run("UPDATE first_run_state SET bootstrap_magic_hash = ? WHERE id = 1", [hash]);
 
 		try {
-			await sendLoginEmail(ownerEmail, magicUrl, config.name);
+			await sendLoginEmail(ownerEmail, magicUrl, config.name, config.domain ?? "ghostwright.dev");
 			db.run("UPDATE first_run_state SET email_sent_at = datetime('now') WHERE id = 1");
 			console.log(`[first-run] Login email sent to ${ownerEmail}`);
 		} catch (err: unknown) {

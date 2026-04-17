@@ -18,6 +18,7 @@ import { handleEvolutionApi } from "./api/evolution.ts";
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { handleMemoryApi } from "./api/memory.ts";
+import { handlePhantomConfigApi, type PhantomConfigPaths } from "./api/phantom-config.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
 import { handleSchedulerApi } from "./api/scheduler.ts";
 import { handleSessionsApi } from "./api/sessions.ts";
@@ -39,6 +40,7 @@ let pluginsApiOverrides: Pick<PluginsApiDeps, "fetcher" | "settingsPath" | "over
 let evolutionEngine: EvolutionEngine | null = null;
 let evolutionQueue: EvolutionQueue | null = null;
 let memorySystem: MemorySystem | null = null;
+let phantomConfigPaths: Partial<PhantomConfigPaths> = {};
 
 type SecretSavedCallback = (requestId: string, secretNames: string[]) => Promise<void>;
 let onSecretSaved: SecretSavedCallback | null = null;
@@ -90,6 +92,18 @@ export function setMemorySystem(memory: MemorySystem): void {
 
 export function clearMemorySystemForTests(): void {
 	memorySystem = null;
+}
+
+// Phantom-config paths. Production wiring leaves these unset so the endpoint
+// falls back to `config/phantom.yaml`, `config/channels.yaml`, and
+// `phantom-config/meta/evolution.json`. Tests point every write at a tmp dir
+// so the on-disk state cannot leak between cases.
+export function setPhantomConfigPaths(paths: Partial<PhantomConfigPaths>): void {
+	phantomConfigPaths = paths;
+}
+
+export function clearPhantomConfigPathsForTests(): void {
+	phantomConfigPaths = {};
 }
 
 export function setMemorySystemForTests(memory: MemorySystem): void {
@@ -277,6 +291,16 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
 		}
 		const apiResponse = await handleSettingsApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/phantom-config")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handlePhantomConfigApi(req, url, {
+			db: dashboardDb,
+			paths: phantomConfigPaths,
+		});
 		if (apiResponse) return apiResponse;
 	}
 	if (url.pathname.startsWith("/ui/api/sessions")) {

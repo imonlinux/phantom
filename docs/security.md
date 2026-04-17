@@ -182,6 +182,35 @@ Dynamic tools (registered at runtime by the agent) execute code in isolated subp
 - Bun script handlers use `--env-file=` to prevent automatic loading of `.env` files
 - Tool input is passed via the TOOL_INPUT environment variable (JSON string)
 
+## Avatar Upload
+
+The Settings > Identity card accepts PNG, JPEG, and WebP images up to 2 MB,
+stored at `data/identity/avatar.<ext>` with a companion `avatar.meta.json`.
+The upload path is locked down across several layers:
+
+- **Zero server-side image decoding.** Bun writes bytes verbatim; the image
+  is only ever decoded inside the browser's sandboxed renderer. This
+  eliminates the "malformed JPEG crashes Bun" class of attack.
+- **MIME allowlist plus magic-byte sniff.** `image/png`, `image/jpeg`,
+  `image/webp` only. SVG is rejected at MIME AND by inspecting the first
+  bytes, which catches SVG (or any other format) renamed to `.png` and
+  submitted with a forged MIME.
+- **Extension derived from the validated MIME.** The operator's filename is
+  never used in any filesystem path, so path traversal via a crafted
+  filename is impossible.
+- **2 MB cap enforced at content-length AND at read.** The client-side
+  Content-Length header is treated as a hint; the server re-checks after
+  reading so a lying or missing header cannot bypass the cap.
+- **Atomic tmp + rename.** Both the image file and its meta JSON are
+  written to `*.tmp` first and then renamed, so a mid-write failure leaves
+  the previous avatar intact.
+- **Auth posture.** POST + DELETE require the cookie session (owner).
+  `GET /ui/avatar` and the scope-friendly mirror `GET /chat/icon` are
+  public because the landing page renders before login.
+
+The avatar is operator-visual state, not configuration; it is not subject to
+the phantom.yaml audit log.
+
 ## Webhook Callback URL Validation
 
 Webhook callback URLs are validated before use to prevent SSRF attacks:

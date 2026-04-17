@@ -6,6 +6,7 @@ export type HealthPayload = {
 	uptime: number;
 	version: string;
 	agent: string;
+	avatar_url: string | null;
 	public_url?: string;
 	role: { id: string; name: string };
 	channels: Record<string, boolean>;

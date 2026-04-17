@@ -7,6 +7,7 @@ import { loadMcpConfig } from "../mcp/config.ts";
 import type { PhantomMcpServer } from "../mcp/server.ts";
 import type { MemoryHealth } from "../memory/types.ts";
 import type { SchedulerHealthSummary } from "../scheduler/health.ts";
+import { avatarUrlIfPresent, handleAvatarGet } from "../ui/api/identity.ts";
 import { handleUiRequest } from "../ui/serve.ts";
 import { type HealthPayload, renderHealthHtml } from "./health-page.ts";
 
@@ -128,6 +129,7 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 					uptime: Math.floor((Date.now() - startedAt) / 1000),
 					version: VERSION,
 					agent: config.name,
+					avatar_url: avatarUrlIfPresent(),
 					...(config.public_url ? { public_url: config.public_url } : {}),
 					role: roleInfo ?? { id: config.role, name: config.role },
 					channels,
@@ -175,6 +177,17 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 			if (url.pathname === "/login/email" && req.method === "POST") {
 				const publicUrl = config.public_url ?? `http://localhost:${config.port}`;
 				return handleEmailLogin(req, publicUrl, config.name);
+			}
+
+			// Public PWA/SW-scoped mirror of the operator avatar. Service
+			// workers cannot reliably reach /ui/* across the /chat/ scope, so
+			// we expose the same bytes under /chat/icon. Same headers as
+			// /ui/avatar.
+			if (url.pathname === "/chat/icon" && req.method === "GET") {
+				return handleAvatarGet(req);
+			}
+			if (url.pathname === "/chat/icon") {
+				return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
 			}
 
 			if (url.pathname.startsWith("/chat") && chatHandler) {

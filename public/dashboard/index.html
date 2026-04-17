@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title data-agent-name-title>Dashboard</title>
+<link rel="icon" type="image/png" href="/ui/avatar" data-agent-avatar-url>
 <link rel="icon" href="data:,">
 <script>(function(){var s=localStorage.getItem('phantom-theme');var d=window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',s||(d?'phantom-dark':'phantom-light'));})();</script>
 <script src="/ui/_agent-name.js"></script>
@@ -16,7 +17,9 @@
 
 <nav class="phantom-nav" aria-label="Primary">
   <a href="/ui/" class="phantom-nav-brand">
-    <span class="phantom-nav-logo" data-agent-name-initial>&nbsp;</span>
+    <span class="phantom-nav-avatar-slot" data-agent-avatar>
+      <span class="phantom-nav-logo" data-agent-avatar-fallback data-agent-name-initial>&nbsp;</span>
+    </span>
     <span data-agent-name>&nbsp;</span>
   </a>
   <span class="phantom-breadcrumb-sep">/</span>

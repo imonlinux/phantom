@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { AgentRuntime } from "../agent/runtime.ts";
+import { avatarUrlIfPresent, readAvatarMetaForManifest } from "../ui/api/identity.ts";
 import { isAuthenticated } from "../ui/serve.ts";
 import type { ChatAttachmentStore } from "./attachment-store.ts";
 import type { ChatEventLog } from "./event-log.ts";
@@ -94,7 +95,8 @@ function isApiPath(path: string): boolean {
 
 async function routeApi(req: Request, url: URL, path: string, deps: ChatHandlerDeps): Promise<Response | null> {
 	if (path === "/chat/bootstrap" && req.method === "GET") {
-		return Response.json(deps.getBootstrapData?.() ?? {});
+		const base = deps.getBootstrapData?.() ?? {};
+		return Response.json({ ...base, avatar_url: avatarUrlIfPresent() });
 	}
 
 	if (path === "/chat/sessions" && req.method === "POST") {
@@ -263,6 +265,12 @@ async function handlePushTest(deps: ChatHandlerDeps): Promise<Response> {
 
 function serveManifest(agentName?: string): Response {
 	const name = agentName && agentName.length > 0 ? agentName : "Phantom";
+	const avatar = readAvatarMetaForManifest();
+	const icons: Array<{ src: string; sizes: string; type: string; purpose: string }> = [];
+	if (avatar) {
+		icons.push({ src: "/chat/icon", sizes: "256x256", type: avatar.mime, purpose: "any" });
+	}
+	icons.push({ src: "/chat/favicon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" });
 	const manifest = {
 		name,
 		short_name: name,
@@ -273,14 +281,7 @@ function serveManifest(agentName?: string): Response {
 		display: "standalone",
 		background_color: "#faf9f5",
 		theme_color: "#4850c4",
-		icons: [
-			{
-				src: "/chat/favicon.svg",
-				sizes: "any",
-				type: "image/svg+xml",
-				purpose: "any",
-			},
-		],
+		icons,
 	};
 	return new Response(JSON.stringify(manifest), {
 		headers: {

@@ -5,6 +5,7 @@
 // module-level setter wired from src/index.ts at startup so this file stays
 // callable from src/ui/serve.ts with no signature change.
 
+import { avatarUrlIfPresent } from "./api/identity.ts";
 import { escapeHtml } from "./html.ts";
 import { agentNameInitial, capitalizeAgentName } from "./name.ts";
 
@@ -18,13 +19,21 @@ export function loginPageHtml(): string {
 	const displayName = capitalizeAgentName(configuredAgentName);
 	const safeName = escapeHtml(displayName);
 	const safeInitial = escapeHtml(agentNameInitial(displayName));
+	// Server-side avatar probe is a cheap synchronous existsSync in
+	// avatarUrlIfPresent. Don't cache; the page renders once per auth attempt.
+	const avatarUrl = avatarUrlIfPresent();
+	const brandLogo = avatarUrl
+		? `<img src="${avatarUrl}" alt="" class="brand-logo-img" onerror="this.remove();this.nextElementSibling.style.display='inline-flex';"><span class="brand-logo" style="display:none;">${safeInitial}</span>`
+		: `<span class="brand-logo">${safeInitial}</span>`;
+	const faviconHref = avatarUrl ? "/ui/avatar" : "data:,";
+	const faviconType = avatarUrl ? "image/png" : "";
 	return `<!DOCTYPE html>
 <html lang="en" data-theme="phantom-light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in - ${safeName}</title>
-<link rel="icon" href="data:,">
+<link rel="icon"${faviconType ? ` type="${faviconType}"` : ""} href="${faviconHref}">
 <script>
 (function(){var s=localStorage.getItem('phantom-theme');var d=window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',s||(d?'phantom-dark':'phantom-light'));})();
 <\/script>
@@ -48,6 +57,7 @@ body { background:var(--color-base-100); color:var(--color-base-content); font-f
 .top-bar { display:flex; align-items:center; justify-content:space-between; padding:var(--space-5) var(--space-8); }
 .brand { display:inline-flex; align-items:center; gap:var(--space-2); font-family:'Instrument Serif',Georgia,serif; font-size:20px; font-weight:400; color:var(--color-base-content); text-decoration:none; }
 .brand-logo { width:24px; height:24px; border-radius:6px; background:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; color:var(--color-primary-content); font-family:'Instrument Serif',serif; font-size:14px; }
+.brand-logo-img { width:24px; height:24px; border-radius:6px; object-fit:cover; display:inline-block; }
 .top-action { display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border:1px solid var(--color-base-300); border-radius:var(--radius-pill); font-size:13px; font-weight:500; color:var(--color-base-content); background:transparent; cursor:pointer; transition:background-color 150ms, border-color 150ms; }
 .top-action:hover { background:color-mix(in oklab, var(--color-base-content) 5%, transparent); }
 
@@ -88,7 +98,7 @@ body { background:var(--color-base-100); color:var(--color-base-content); font-f
 
 <div class="top-bar">
   <a href="/ui/" class="brand">
-    <span class="brand-logo">${safeInitial}</span>
+    ${brandLogo}
     <span>${safeName}</span>
   </a>
   <button id="theme-toggle" class="top-action" aria-label="Toggle theme">

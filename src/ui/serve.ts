@@ -16,6 +16,7 @@ import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/st
 import { handleCostApi } from "./api/cost.ts";
 import { handleEvolutionApi } from "./api/evolution.ts";
 import { handleHooksApi } from "./api/hooks.ts";
+import { handleAvatarDelete, handleAvatarGet, handleAvatarPost } from "./api/identity.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { handleMemoryApi } from "./api/memory.ts";
 import { type PhantomConfigPaths, handlePhantomConfigApi } from "./api/phantom-config.ts";
@@ -220,6 +221,16 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 		return handleSecretSave(req, secretSaveMatch[1]);
 	}
 
+	// Public read for avatar: surfaces on the landing + login + agent pages
+	// before the operator has authenticated, so this endpoint is unauth.
+	// The write path (POST/DELETE) falls through to the auth gate below.
+	if (url.pathname === "/ui/avatar" && req.method === "GET") {
+		return handleAvatarGet(req);
+	}
+	if (url.pathname === "/ui/avatar") {
+		return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
+	}
+
 	// Public assets (logo, favicon) - no auth needed
 	if (url.pathname === "/ui/phantom-logo.svg") {
 		const filePath = isPathSafe(url.pathname);
@@ -246,6 +257,16 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 	// SSE endpoint
 	if (url.pathname === "/ui/api/events") {
 		return createSSEResponse();
+	}
+
+	// Avatar write/delete. Cookie-auth required; the public read lives above.
+	if (url.pathname === "/ui/api/identity/avatar") {
+		if (req.method === "POST") return handleAvatarPost(req);
+		if (req.method === "DELETE") return handleAvatarDelete();
+		return new Response("Method not allowed", {
+			status: 405,
+			headers: { Allow: "POST, DELETE" },
+		});
 	}
 
 	// Dashboard API routes (PR1). Return as soon as one matches so the static

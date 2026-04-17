@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { avatarUrlIfPresent } from "./api/identity.ts";
 import { publish } from "./events.ts";
 import { escapeHtml } from "./html.ts";
 import { agentNameInitial, capitalizeAgentName } from "./name.ts";
@@ -136,15 +137,27 @@ export function wrapInBaseTemplate(title: string, content: string, agentName: st
 	// injection) and the final split/join for the content marker sidesteps the
 	// String.replace dollar-pattern trap ($&, $`, $', $$) that would otherwise
 	// corrupt agent-authored content containing those sequences.
+	//
+	// Avatar substitution is baked in at generation time rather than at render:
+	// the agent creates these pages once, and the file is served static
+	// thereafter. If the operator updates the avatar later, the img src of
+	// /ui/avatar picks up the new bytes (same URL, new ETag).
+	const avatarUrl = avatarUrlIfPresent();
+	const avatarImg = avatarUrl
+		? `<img src="${avatarUrl}" alt="" style="width:22px;height:22px;border-radius:6px;object-fit:cover;margin-right:8px;" onerror="this.remove();this.nextElementSibling.style.display='inline-flex';">`
+		: "";
+	const fallbackDisplay = avatarUrl ? "none" : "inline-flex";
 	const substitutions: Record<string, string> = {
 		"{{TITLE}}": escapeHtml(title),
 		"{{DATE}}": date,
 		"{{TIMESTAMP}}": timestamp,
 		"{{AGENT_NAME_CAPITALIZED}}": escapeHtml(displayName),
 		"{{AGENT_NAME_INITIAL}}": escapeHtml(initial),
+		"{{AGENT_AVATAR_IMG}}": avatarImg,
+		"{{AGENT_FALLBACK_DISPLAY}}": fallbackDisplay,
 	};
 	const withPlaceholders = template.replace(
-		/\{\{(TITLE|DATE|TIMESTAMP|AGENT_NAME_CAPITALIZED|AGENT_NAME_INITIAL)\}\}/g,
+		/\{\{(TITLE|DATE|TIMESTAMP|AGENT_NAME_CAPITALIZED|AGENT_NAME_INITIAL|AGENT_AVATAR_IMG|AGENT_FALLBACK_DISPLAY)\}\}/g,
 		(match) => substitutions[match] ?? match,
 	);
 	return withPlaceholders.split("<!-- Agent writes content here -->").join(content);

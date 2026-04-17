@@ -10,6 +10,12 @@
   "theme_color": "#4850c4",
   "icons": [
     {
+      "src": "/chat/icon",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/chat/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",

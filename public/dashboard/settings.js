@@ -77,6 +77,21 @@
 		audit: { entries: null, loading: false, error: null, expanded: false, loaded: false },
 		lastModifiedAt: null,
 		lastModifiedBy: null,
+		avatar: {
+			// URL used by the <img>. Bumped with ?v=<cacheBust> after upload so
+			// the browser cache does not show the prior image. Starts as null
+			// until the first probe resolves.
+			url: null,
+			probing: false,
+			uploading: false,
+			resetting: false,
+			cacheBust: 0,
+			lastError: null,
+			// Tracks whether the HEAD probe has ever succeeded this session.
+			// Drives the visibility of the Reset button.
+			exists: null,
+			displayName: "",
+		},
 	};
 	var ctx = null;
 	var root = null;
@@ -549,6 +564,280 @@
 		return "";
 	}
 
+	// ----- Identity > Avatar custom card --------------------------------
+	// The avatar is operator-visual state (not a phantom.yaml key) so it has
+	// its own upload/delete endpoint at /ui/api/identity/avatar. This card
+	// renders as a preamble to the six-section form. It owns its cacheBust
+	// counter so the preview img swaps instantly after a successful POST.
+
+	function avatarInitialLetter() {
+		var d = state.avatar.displayName || (state.sections.identity.draft && state.sections.identity.draft.name) || "P";
+		var s = String(d).trim();
+		if (!s) return "P";
+		return s.charAt(0).toUpperCase();
+	}
+
+	function avatarPreviewHtml() {
+		var a = state.avatar;
+		var letter = avatarInitialLetter();
+		var url = a.url ? a.url + (a.cacheBust ? "?v=" + a.cacheBust : "") : null;
+		var hidden = a.exists === false;
+		var imgDisplay = hidden ? "none" : "block";
+		var letterDisplay = hidden ? "inline-flex" : "none";
+		var img = '<img id="dash-avatar-img" class="dash-avatar-preview"' +
+			' src="' + esc(url || "/ui/avatar") + '"' +
+			' alt=""' +
+			' style="display:' + imgDisplay + '">';
+		var fallback = '<span id="dash-avatar-letter" class="dash-avatar-preview-letter"' +
+			' style="display:' + letterDisplay + '">' + esc(letter) + '</span>';
+		return '<div class="dash-avatar-preview-wrap">' + img + fallback + '</div>';
+	}
+
+	function avatarActionsHtml() {
+		var a = state.avatar;
+		var uploadLabel = a.uploading ? "Uploading..." : "Choose image";
+		var resetLabel = a.resetting ? "Removing..." : "Reset to letter";
+		var resetBtn = a.exists
+			? '<button type="button" id="dash-avatar-reset" class="dash-btn dash-btn-ghost"' +
+				(a.resetting || a.uploading ? " disabled" : "") +
+				">" + esc(resetLabel) + "</button>"
+			: "";
+		return (
+			'<div class="dash-identity-actions">' +
+			'<button type="button" id="dash-avatar-choose" class="dash-btn dash-btn-primary"' +
+				(a.uploading ? " disabled" : "") +
+				">" + esc(uploadLabel) + "</button>" +
+			'<input type="file" id="dash-avatar-file" accept="image/png,image/jpeg,image/webp" hidden>' +
+			resetBtn +
+			"</div>"
+		);
+	}
+
+	function avatarCardHtml() {
+		var a = state.avatar;
+		var errorBlock = a.lastError
+			? '<div class="dash-field-error" role="alert" style="display:block;margin-top:var(--space-2);">' + esc(a.lastError) + "</div>"
+			: "";
+		return (
+			'<section class="dash-settings-section" data-section-root="brand_avatar">' +
+			"<header>" +
+			'<h2 class="dash-hook-event-title">Identity</h2>' +
+			'<p class="dash-hook-event-summary">Upload a logo and it replaces the first-letter badge on the landing, dashboard, chat, login, and every page your agent generates. Stored as a single file on disk; served with a 5-minute cache.</p>' +
+			"</header>" +
+			'<div class="dash-identity-card">' +
+			avatarPreviewHtml() +
+			'<div>' +
+			'<div id="dash-avatar-drop" class="dash-avatar-drop" tabindex="0" role="button" aria-label="Drop an image here or choose a file"><strong>Drop an image</strong> here, or choose one. PNG, JPEG, or WebP, up to 2 MB. We scale it to 256x256 before upload.</div>' +
+			avatarActionsHtml() +
+			errorBlock +
+			'<div class="dash-identity-guidance">' +
+			'<p>Your image appears in the navbar, chat header, sidebar, push notifications, the PWA home-screen icon, and the browser favicon.</p>' +
+			'<p class="dash-identity-slack">To change the Slack avatar, edit the icon in your Slack app settings at <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer noopener">api.slack.com/apps</a>.</p>' +
+			'<p>If you installed the chat as a PWA, the home-screen icon may cache. Re-install or wait for the OS to refresh.</p>' +
+			"</div>" +
+			"</div>" +
+			"</div>" +
+			"</section>"
+		);
+	}
+
+	function probeAvatar() {
+		if (state.avatar.probing) return;
+		state.avatar.probing = true;
+		fetch("/ui/avatar", { method: "GET", credentials: "same-origin", cache: "no-store" })
+			.then(function (r) {
+				state.avatar.probing = false;
+				state.avatar.exists = r.ok;
+				state.avatar.url = r.ok ? "/ui/avatar" : null;
+				render();
+			})
+			.catch(function () {
+				state.avatar.probing = false;
+				state.avatar.exists = false;
+				render();
+			});
+	}
+
+	function resizeToBlob(file) {
+		// cover-fit to 256x256, encode as PNG (preserves transparency).
+		return createImageBitmap(file).then(function (bitmap) {
+			var canvas = document.createElement("canvas");
+			canvas.width = 256; canvas.height = 256;
+			var ctx2d = canvas.getContext("2d");
+			if (!ctx2d) throw new Error("Canvas 2d context unavailable");
+			var ratio = Math.max(256 / bitmap.width, 256 / bitmap.height);
+			var w = bitmap.width * ratio;
+			var h = bitmap.height * ratio;
+			ctx2d.clearRect(0, 0, 256, 256);
+			ctx2d.drawImage(bitmap, (256 - w) / 2, (256 - h) / 2, w, h);
+			return new Promise(function (resolve, reject) {
+				canvas.toBlob(function (blob) { blob ? resolve(blob) : reject(new Error("Canvas encode failed")); }, "image/png", 0.92);
+			});
+		});
+	}
+
+	function postAvatarBlob(blob) {
+		var form = new FormData();
+		form.append("file", blob, "avatar.png");
+		return fetch("/ui/api/identity/avatar", {
+			method: "POST",
+			credentials: "same-origin",
+			body: form,
+		}).then(function (res) {
+			if (!res.ok) {
+				return res.json().then(function (body) {
+					throw new Error((body && body.error) || ("Upload failed (" + res.status + ")"));
+				}, function () {
+					throw new Error("Upload failed (" + res.status + ")");
+				});
+			}
+			return res.json();
+		});
+	}
+
+	function beginUpload(file) {
+		if (!file) return;
+		if (state.avatar.uploading) return;
+		state.avatar.lastError = null;
+		// Client-side size guard matches the server cap (2MB at content-length).
+		if (file.size > 2 * 1024 * 1024) {
+			state.avatar.lastError = "Image is larger than 2 MB. Please choose a smaller file.";
+			render();
+			return;
+		}
+		var allowed = ["image/png", "image/jpeg", "image/webp"];
+		if (allowed.indexOf(file.type) < 0) {
+			state.avatar.lastError = "Unsupported image type. Use PNG, JPEG, or WebP.";
+			render();
+			return;
+		}
+		state.avatar.uploading = true;
+		render();
+		resizeToBlob(file)
+			.then(postAvatarBlob)
+			.then(function () {
+				state.avatar.uploading = false;
+				state.avatar.exists = true;
+				state.avatar.url = "/ui/avatar";
+				state.avatar.cacheBust = state.avatar.cacheBust + 1;
+				state.avatar.lastError = null;
+				ctx.toast("success", "Avatar updated", "Your logo is live across every surface.");
+				// Repaint surrounding navbar in-place by notifying the IIFE.
+				try {
+					window.dispatchEvent(new CustomEvent("phantom:avatar-updated", { detail: { url: "/ui/avatar" } }));
+				} catch (e) {}
+				render();
+			})
+			.catch(function (err) {
+				state.avatar.uploading = false;
+				state.avatar.lastError = (err && err.message) || String(err);
+				render();
+			});
+	}
+
+	function askResetAvatar() {
+		var body = document.createElement("div");
+		var p = document.createElement("p");
+		p.style.margin = "0 0 var(--space-2)";
+		p.textContent = "Remove the uploaded avatar and fall back to the letter badge?";
+		var info = document.createElement("p");
+		info.className = "phantom-muted";
+		info.style.margin = "0";
+		info.style.fontSize = "12px";
+		info.textContent = "You can upload a new image any time.";
+		body.appendChild(p);
+		body.appendChild(info);
+		ctx.openModal({
+			title: "Reset avatar?",
+			body: body,
+			actions: [
+				{ label: "Keep avatar", className: "dash-btn-ghost" },
+				{
+					label: "Reset",
+					className: "dash-btn-danger",
+					onClick: function () { confirmResetAvatar(); return true; },
+				},
+			],
+		});
+	}
+
+	function confirmResetAvatar() {
+		if (state.avatar.resetting) return;
+		state.avatar.resetting = true;
+		render();
+		fetch("/ui/api/identity/avatar", { method: "DELETE", credentials: "same-origin" })
+			.then(function (res) {
+				state.avatar.resetting = false;
+				if (!res.ok && res.status !== 204) {
+					throw new Error("Reset failed (" + res.status + ")");
+				}
+				state.avatar.exists = false;
+				state.avatar.url = null;
+				state.avatar.cacheBust = state.avatar.cacheBust + 1;
+				ctx.toast("success", "Avatar removed", "The letter badge is showing again everywhere.");
+				try {
+					window.dispatchEvent(new CustomEvent("phantom:avatar-updated", { detail: { url: null } }));
+				} catch (e) {}
+				render();
+			})
+			.catch(function (err) {
+				state.avatar.resetting = false;
+				state.avatar.lastError = (err && err.message) || String(err);
+				render();
+			});
+	}
+
+	function wireAvatarCard() {
+		var chooseBtn = document.getElementById("dash-avatar-choose");
+		var fileInput = document.getElementById("dash-avatar-file");
+		var resetBtn = document.getElementById("dash-avatar-reset");
+		var drop = document.getElementById("dash-avatar-drop");
+		var img = document.getElementById("dash-avatar-img");
+		var letter = document.getElementById("dash-avatar-letter");
+
+		if (chooseBtn && fileInput) {
+			chooseBtn.addEventListener("click", function () { fileInput.click(); });
+			fileInput.addEventListener("change", function () {
+				var f = fileInput.files && fileInput.files[0];
+				if (f) beginUpload(f);
+				fileInput.value = "";
+			});
+		}
+		if (resetBtn) {
+			resetBtn.addEventListener("click", function () { askResetAvatar(); });
+		}
+		if (drop) {
+			drop.addEventListener("dragenter", function (e) { e.preventDefault(); drop.setAttribute("data-drag", "true"); });
+			drop.addEventListener("dragover", function (e) { e.preventDefault(); drop.setAttribute("data-drag", "true"); });
+			drop.addEventListener("dragleave", function () { drop.removeAttribute("data-drag"); });
+			drop.addEventListener("drop", function (e) {
+				e.preventDefault();
+				drop.removeAttribute("data-drag");
+				var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+				if (f) beginUpload(f);
+			});
+			drop.addEventListener("keydown", function (e) {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					if (fileInput) fileInput.click();
+				}
+			});
+			drop.addEventListener("click", function () { if (fileInput) fileInput.click(); });
+		}
+		if (img) {
+			img.addEventListener("load", function () {
+				state.avatar.exists = true;
+				if (letter) letter.style.display = "none";
+				img.style.display = "block";
+			});
+			img.addEventListener("error", function () {
+				state.avatar.exists = false;
+				img.style.display = "none";
+				if (letter) letter.style.display = "inline-flex";
+			});
+		}
+	}
+
 	function renderSection(meta) {
 		var sec = state.sections[meta.key];
 		var dirty = isSectionDirty(meta.key);
@@ -629,10 +918,15 @@
 			);
 			return;
 		}
-		root.innerHTML = renderHeader() + SECTIONS.map(renderSection).join("") + renderAuditDrawer();
+		root.innerHTML =
+			renderHeader() + avatarCardHtml() + SECTIONS.map(renderSection).join("") + renderAuditDrawer();
 		wireInputs();
 		wireButtons();
 		wireAuditDrawer();
+		wireAvatarCard();
+		// Keep the preview's displayName in sync with the "Agent name" field so
+		// the letter fallback reflects typed-but-unsaved edits.
+		state.avatar.displayName = (state.sections.identity.draft && state.sections.identity.draft.name) || state.avatar.displayName || "";
 		ctx.setBreadcrumb("Settings");
 	}
 
@@ -898,8 +1192,10 @@
 			.then(function (res) {
 				if (!res || !res.config) throw new Error("Missing config in response");
 				hydrate(res.config, res.audit || {});
+				state.avatar.displayName = res.config.name || "";
 				state.loading = false;
 				render();
+				probeAvatar();
 			})
 			.catch(function (err) {
 				state.loading = false;

@@ -13,6 +13,11 @@ const SHELL_CACHE = "phantom-chat-shell-" + VERSION;
 // which would render title and body as the same string.
 var agentName = "";
 
+// Avatar URL posted by the client. Null or empty means "use favicon.svg".
+// Falls through /chat/icon which is the PWA-scope-friendly mirror of
+// /ui/avatar; the fetch still works if the scope is installed as a PWA.
+var avatarUrl = "";
+
 self.addEventListener("install", function (event) {
   self.skipWaiting();
 });
@@ -109,10 +114,11 @@ self.addEventListener("push", function (event) {
   // Using data.body here caused title=body duplication when the client
   // had not yet posted the agent name (push landed before first mount).
   var title = data.title || agentName || "Message";
+  var icon = avatarUrl || "/chat/icon";
   var options = {
     body: data.body || "",
-    icon: "/chat/favicon.svg",
-    badge: "/chat/favicon.svg",
+    icon: icon,
+    badge: icon,
     tag: data.tag,
     data: data.data || {},
     requireInteraction: data.requireInteraction || false,
@@ -154,5 +160,10 @@ self.addEventListener("message", function (event) {
   }
   if (event.data && event.data.type === "SET_AGENT_NAME" && typeof event.data.agentName === "string") {
     agentName = event.data.agentName;
+  }
+  if (event.data && event.data.type === "SET_AVATAR_URL") {
+    // Null / empty string means "no avatar; fall back to /chat/icon (which
+    // 404s if no avatar is uploaded) and then the SVG default".
+    avatarUrl = typeof event.data.url === "string" ? event.data.url : "";
   }
 });

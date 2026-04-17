@@ -22,7 +22,7 @@
 
 <style>
 :root {
-  --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px; --space-12:48px; --space-16:64px;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px; --space-12:48px; --space-16:64px;
   --radius-sm:8px; --radius-md:10px; --radius-lg:14px; --radius-pill:9999px;
   --motion-fast:100ms; --motion-base:150ms; --ease-out:cubic-bezier(0.25,0.46,0.45,0.94);
 }
@@ -30,6 +30,7 @@ html { transition: background-color 150ms ease, color 150ms ease; }
 body { font-feature-settings: "ss01","cv11"; font-variant-numeric: tabular-nums; -webkit-font-smoothing:antialiased; }
 @keyframes phantom-fade-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 @keyframes phantom-pulse { 0%,100% { opacity:1; } 50% { opacity:0.55; } }
+@keyframes phantom-skeleton { 0% { opacity:0.55; } 50% { opacity:0.9; } 100% { opacity:0.55; } }
 main { animation: phantom-fade-in 300ms var(--ease-out); }
 
 .phantom-page { max-width:1100px; margin:0 auto; padding:var(--space-8) var(--space-8); }
@@ -43,10 +44,10 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
 .phantom-display { font-family:'Instrument Serif',Georgia,serif; font-size:clamp(44px,5vw,60px); font-weight:400; line-height:1.05; letter-spacing:-0.01em; color:var(--color-base-content); margin:0 0 var(--space-4); }
 .phantom-display em { font-style:italic; font-weight:400; }
 .phantom-h1 { font-family:'Instrument Serif',Georgia,serif; font-size:32px; font-weight:500; line-height:1.15; letter-spacing:-0.01em; color:var(--color-base-content); margin:0 0 var(--space-3); }
-.phantom-h2 { font-family:'Instrument Serif',Georgia,serif; font-size:22px; font-weight:500; line-height:1.25; color:var(--color-base-content); margin:0 0 var(--space-3); }
+.phantom-h2 { font-family:'Instrument Serif',Georgia,serif; font-size:26px; font-weight:500; line-height:1.2; color:var(--color-base-content); margin:0 0 var(--space-2); letter-spacing:-0.01em; }
 .phantom-h3 { font-family:'Inter',sans-serif; font-size:14px; font-weight:600; line-height:1.3; color:var(--color-base-content); margin:0 0 var(--space-2); }
 .phantom-eyebrow { font-family:'Inter',sans-serif; font-size:11px; font-weight:600; line-height:1; letter-spacing:0.08em; text-transform:uppercase; color:color-mix(in oklab, var(--color-base-content) 50%, transparent); margin:0 0 var(--space-3); }
-.phantom-lead { font-family:'Inter',sans-serif; font-size:17px; font-weight:400; line-height:1.6; color:color-mix(in oklab, var(--color-base-content) 72%, transparent); max-width:560px; }
+.phantom-lead { font-family:'Inter',sans-serif; font-size:17px; font-weight:400; line-height:1.6; color:color-mix(in oklab, var(--color-base-content) 72%, transparent); max-width:560px; margin:0 0 var(--space-5); }
 .phantom-body { font-family:'Inter',sans-serif; font-size:14px; line-height:1.55; color:var(--color-base-content); }
 .phantom-muted { color:color-mix(in oklab, var(--color-base-content) 55%, transparent); }
 
@@ -69,13 +70,70 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
 .phantom-dot { width:6px; height:6px; border-radius:50%; display:inline-block; }
 .phantom-dot-live { background:var(--color-success); box-shadow:0 0 0 3px color-mix(in oklab, var(--color-success) 25%, transparent); animation:phantom-pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
 
-.phantom-button { display:inline-flex; align-items:center; justify-content:center; gap:var(--space-2); font-family:Inter,sans-serif; font-size:14px; font-weight:500; padding:11px 18px; border-radius:var(--radius-pill); border:1px solid transparent; background:var(--color-base-content); color:var(--color-base-100); cursor:pointer; text-decoration:none; transition:opacity var(--motion-fast), transform var(--motion-fast); }
+.phantom-button { display:inline-flex; align-items:center; justify-content:center; gap:var(--space-2); font-family:Inter,sans-serif; font-size:14px; font-weight:500; padding:11px 18px; border-radius:var(--radius-pill); border:1px solid transparent; background:var(--color-base-content); color:var(--color-base-100); cursor:pointer; text-decoration:none; transition:opacity var(--motion-fast), transform var(--motion-fast), box-shadow var(--motion-fast); }
 .phantom-button:hover { opacity:0.88; }
+.phantom-button:focus-visible { outline:none; box-shadow:0 0 0 3px color-mix(in oklab, var(--color-primary) 40%, transparent); }
+.phantom-button-primary { background:var(--color-base-content); color:var(--color-base-100); }
 .phantom-button-ghost { background:transparent; color:var(--color-base-content); border-color:var(--color-base-300); }
 .phantom-button-ghost:hover { background:color-mix(in oklab, var(--color-base-content) 5%, transparent); }
+.phantom-button-sm { padding:7px 12px; font-size:13px; }
+
+.phantom-hero { display:grid; grid-template-columns:120px 1fr; gap:var(--space-8); align-items:center; margin:var(--space-12) 0 var(--space-16); }
+.phantom-hero-avatar-slot { width:120px; height:120px; border-radius:24px; background:color-mix(in oklab, var(--color-primary) 10%, var(--color-base-200)); border:1px solid color-mix(in oklab, var(--color-primary) 20%, var(--color-base-300)); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.phantom-hero-avatar-slot img[data-agent-avatar-img] { width:120px; height:120px; border-radius:24px; object-fit:cover; display:block; }
+.phantom-hero-letter { font-family:'Instrument Serif',Georgia,serif; font-size:72px; line-height:1; color:var(--color-primary); font-style:italic; }
+.phantom-hero-copy { min-width:0; }
+.phantom-hero-copy .phantom-display { margin-bottom:var(--space-3); }
+.phantom-hero-actions { display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; margin-top:var(--space-6); }
+@media (max-width:720px) {
+  .phantom-hero { grid-template-columns:1fr; gap:var(--space-5); text-align:left; }
+  .phantom-hero-avatar-slot { margin:0; }
+}
+@media (max-width:500px) {
+  .phantom-hero-actions { flex-direction:column; align-items:stretch; }
+  .phantom-hero-actions .phantom-button { width:100%; }
+}
+
+.phantom-section-header { margin-bottom:var(--space-5); }
+.phantom-section-title { font-family:'Instrument Serif',Georgia,serif; font-size:28px; font-weight:500; line-height:1.2; letter-spacing:-0.01em; color:var(--color-base-content); margin:0 0 var(--space-2); }
+.phantom-section-sub { font-family:Inter,sans-serif; font-size:14px; line-height:1.55; color:color-mix(in oklab, var(--color-base-content) 62%, transparent); margin:0; max-width:560px; }
+
+.phantom-details-link { font-family:Inter,sans-serif; font-size:11px; font-weight:500; color:color-mix(in oklab, var(--color-base-content) 55%, transparent); text-decoration:none; letter-spacing:0.02em; transition:color var(--motion-fast); }
+.phantom-details-link:hover { color:var(--color-primary); }
+.phantom-details-link:focus-visible { outline:none; color:var(--color-primary); text-decoration:underline; }
+
+.phantom-tiles-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:var(--space-4); }
+.phantom-tile { background:var(--color-base-200); border:1px solid var(--color-base-300); border-radius:var(--radius-lg); padding:var(--space-5); display:flex; flex-direction:column; gap:var(--space-3); min-height:170px; transition:border-color var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+.phantom-tile:hover { border-color:color-mix(in oklab, var(--color-primary) 32%, var(--color-base-300)); transform:translateY(-1px); }
+.phantom-tile-icon { width:28px; height:28px; border-radius:var(--radius-sm); background:color-mix(in oklab, var(--color-primary) 12%, transparent); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; }
+.phantom-tile-icon svg { width:16px; height:16px; }
+.phantom-tile-title { font-family:Inter,sans-serif; font-size:15px; font-weight:600; line-height:1.25; color:var(--color-base-content); margin:0; }
+.phantom-tile-desc { font-family:Inter,sans-serif; font-size:13px; line-height:1.5; color:color-mix(in oklab, var(--color-base-content) 62%, transparent); margin:0; flex:1; }
+.phantom-tile-cta { align-self:flex-start; margin-top:auto; }
+.phantom-tile-skeleton { background:var(--color-base-200); border:1px solid var(--color-base-300); border-radius:var(--radius-lg); padding:var(--space-5); min-height:170px; display:flex; flex-direction:column; gap:var(--space-3); animation:phantom-skeleton 1.4s ease-in-out infinite; }
+.phantom-tile-skeleton-bar { background:color-mix(in oklab, var(--color-base-content) 8%, transparent); border-radius:4px; height:12px; }
+.phantom-tile-skeleton-bar.tall { height:18px; width:70%; }
+.phantom-tile-skeleton-bar.full { width:100%; }
+.phantom-tile-skeleton-bar.short { width:45%; }
+
+.phantom-pages-list { display:flex; flex-direction:column; gap:var(--space-2); }
+.phantom-page-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:var(--space-4); align-items:center; padding:var(--space-3) var(--space-4); border:1px solid var(--color-base-300); border-radius:var(--radius-md); background:var(--color-base-200); text-decoration:none; color:var(--color-base-content); transition:border-color var(--motion-fast), background-color var(--motion-fast); }
+.phantom-page-row:hover { border-color:color-mix(in oklab, var(--color-primary) 32%, var(--color-base-300)); background:color-mix(in oklab, var(--color-primary) 3%, var(--color-base-200)); }
+.phantom-page-row:focus-visible { outline:none; border-color:var(--color-primary); box-shadow:0 0 0 3px color-mix(in oklab, var(--color-primary) 25%, transparent); }
+.phantom-page-path { font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:color-mix(in oklab, var(--color-base-content) 58%, transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.phantom-page-title { font-family:Inter,sans-serif; font-size:14px; font-weight:500; color:var(--color-base-content); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.phantom-page-time { font-family:Inter,sans-serif; font-size:12px; color:color-mix(in oklab, var(--color-base-content) 50%, transparent); white-space:nowrap; }
+@media (max-width:640px) {
+  .phantom-page-row { grid-template-columns:1fr; gap:var(--space-1); }
+  .phantom-page-time { justify-self:start; }
+}
+.phantom-empty { padding:var(--space-5); border:1px dashed var(--color-base-300); border-radius:var(--radius-md); background:color-mix(in oklab, var(--color-primary) 3%, var(--color-base-200)); font-family:Inter,sans-serif; font-size:14px; line-height:1.55; color:color-mix(in oklab, var(--color-base-content) 70%, transparent); }
+.phantom-empty a { color:var(--color-primary); text-decoration:underline; text-underline-offset:2px; }
+.phantom-empty a:hover { text-decoration-thickness:2px; }
 
 .quick-link { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-4); border:1px solid var(--color-base-300); border-radius:var(--radius-md); text-decoration:none; color:var(--color-base-content); transition:border-color var(--motion-fast), background-color var(--motion-fast); }
 .quick-link:hover { border-color:color-mix(in oklab, var(--color-primary) 30%, var(--color-base-300)); background:color-mix(in oklab, var(--color-primary) 3%, transparent); }
+.quick-link:focus-visible { outline:none; border-color:var(--color-primary); box-shadow:0 0 0 3px color-mix(in oklab, var(--color-primary) 25%, transparent); }
 .quick-link-icon { width:32px; height:32px; border-radius:var(--radius-sm); background:color-mix(in oklab, var(--color-primary) 10%, transparent); color:var(--color-primary); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .quick-link-body { flex:1; min-width:0; }
 .quick-link-title { font-size:14px; font-weight:500; color:var(--color-base-content); margin-bottom:2px; }
@@ -105,19 +163,31 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
 
 <main class="phantom-page">
 
-  <section style="margin:var(--space-12) 0 var(--space-16); max-width:780px;">
-    <p class="phantom-eyebrow">The agent is awake</p>
-    <h1 class="phantom-display"><span data-agent-name>&nbsp;</span> works <em>alongside you</em>, not for you.</h1>
-    <p class="phantom-lead">Your autonomous AI co-worker. Generates dashboards, schedules jobs, remembers everything, and iterates on itself between messages. This is the surface it creates for the pages it wants to show you.</p>
+  <section class="phantom-hero">
+    <div class="phantom-hero-avatar-slot" data-agent-avatar>
+      <span class="phantom-hero-letter" data-agent-avatar-fallback data-agent-name-initial>&nbsp;</span>
+    </div>
+    <div class="phantom-hero-copy">
+      <p class="phantom-eyebrow">the agent is awake</p>
+      <h1 class="phantom-display"><span data-agent-name>&nbsp;</span> works <em>alongside you</em>, not for you.</h1>
+      <p class="phantom-lead">An autonomous co-worker that remembers, acts, and evolves in your loop. Chat, schedule jobs, build pages you can bookmark, iterate between messages.</p>
+      <div class="phantom-hero-actions">
+        <a class="phantom-button phantom-button-primary" href="/chat">Talk to <span data-agent-name>&nbsp;</span></a>
+        <a class="phantom-button phantom-button-ghost" href="/ui/dashboard/">Open dashboard</a>
+      </div>
+    </div>
   </section>
 
   <section class="phantom-card" style="margin-bottom:var(--space-10);">
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-5);">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-5); gap:var(--space-3);">
       <p class="phantom-eyebrow" style="margin:0;">Agent status</p>
-      <span class="phantom-badge phantom-badge-success" id="status-badge">
-        <span class="phantom-dot phantom-dot-live"></span>
-        online
-      </span>
+      <div style="display:flex; align-items:center; gap:var(--space-3);">
+        <span class="phantom-badge phantom-badge-success" id="status-badge">
+          <span class="phantom-dot phantom-dot-live"></span>
+          online
+        </span>
+        <a class="phantom-details-link" href="/health">Details &rarr;</a>
+      </div>
     </div>
     <div class="phantom-grid-stats">
       <div class="phantom-stat">
@@ -143,15 +213,41 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
     </div>
   </section>
 
+  <section style="margin-bottom:var(--space-12);">
+    <header class="phantom-section-header">
+      <h2 class="phantom-section-title">What can <span data-agent-name>&nbsp;</span> do?</h2>
+      <p class="phantom-section-sub">Starter prompts, not a menu. <span data-agent-name>&nbsp;</span> decides what to actually do once you hit send.</p>
+    </header>
+    <div class="phantom-tiles-grid" id="phantom-starter-tiles" aria-busy="true">
+      <div class="phantom-tile-skeleton"><div class="phantom-tile-skeleton-bar short" style="width:28px;height:28px;border-radius:var(--radius-sm);"></div><div class="phantom-tile-skeleton-bar tall"></div><div class="phantom-tile-skeleton-bar full"></div><div class="phantom-tile-skeleton-bar short"></div></div>
+      <div class="phantom-tile-skeleton"><div class="phantom-tile-skeleton-bar short" style="width:28px;height:28px;border-radius:var(--radius-sm);"></div><div class="phantom-tile-skeleton-bar tall"></div><div class="phantom-tile-skeleton-bar full"></div><div class="phantom-tile-skeleton-bar short"></div></div>
+      <div class="phantom-tile-skeleton"><div class="phantom-tile-skeleton-bar short" style="width:28px;height:28px;border-radius:var(--radius-sm);"></div><div class="phantom-tile-skeleton-bar tall"></div><div class="phantom-tile-skeleton-bar full"></div><div class="phantom-tile-skeleton-bar short"></div></div>
+    </div>
+  </section>
+
+  <section style="margin-bottom:var(--space-12);">
+    <header class="phantom-section-header">
+      <h2 class="phantom-section-title">Pages <span data-agent-name>&nbsp;</span> has created for you</h2>
+      <p class="phantom-section-sub">HTML your agent has published to this server, newest first.</p>
+    </header>
+    <div class="phantom-pages-list" id="phantom-pages-list" aria-busy="true">
+      <div class="phantom-page-row" aria-hidden="true" style="pointer-events:none; opacity:0.6;">
+        <span class="phantom-page-path">/ui/&hellip;</span>
+        <span class="phantom-page-title">Loading&hellip;</span>
+        <span class="phantom-page-time">&hellip;</span>
+      </div>
+    </div>
+  </section>
+
   <section style="margin-bottom:var(--space-10);">
     <h2 class="phantom-h2">Quick links</h2>
-    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-3);">
+    <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:var(--space-3);">
 
-      <a href="/health" class="quick-link">
-        <span class="quick-link-icon"><svg style="width:16px;height:16px;" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l2 2"/></svg></span>
+      <a href="/ui/dashboard/" class="quick-link">
+        <span class="quick-link-icon"><svg style="width:16px;height:16px;" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"/></svg></span>
         <div class="quick-link-body">
-          <p class="quick-link-title">Health</p>
-          <p class="quick-link-desc">/health</p>
+          <p class="quick-link-title">Dashboard</p>
+          <p class="quick-link-desc">/ui/dashboard/</p>
         </div>
         <svg class="quick-link-arrow" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
       </a>
@@ -164,23 +260,6 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
         </div>
         <svg class="quick-link-arrow" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
       </a>
-
-      <a href="/ui/dashboard/" class="quick-link">
-        <span class="quick-link-icon"><svg style="width:16px;height:16px;" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"/></svg></span>
-        <div class="quick-link-body">
-          <p class="quick-link-title">Dashboard</p>
-          <p class="quick-link-desc">/ui/dashboard/</p>
-        </div>
-        <svg class="quick-link-arrow" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
-      </a>
-    </div>
-  </section>
-
-  <section style="margin-bottom:var(--space-12);">
-    <div class="phantom-card" style="background:color-mix(in oklab, var(--color-primary) 4%, var(--color-base-200));">
-      <p class="phantom-eyebrow" style="color:var(--color-primary);">What is this?</p>
-      <h2 class="phantom-h2" style="margin-top:4px;">Pages the agent creates for you.</h2>
-      <p class="phantom-body phantom-muted" style="max-width:560px;">When <span data-agent-name>&nbsp;</span> writes a dashboard, report, chart, or anything richer than Slack can display, it publishes the HTML here. Every page is cookie-auth protected. Ask your agent in Slack for a magic link, or run <code class="phantom-mono" style="padding:2px 6px; background:color-mix(in oklab, var(--color-base-content) 6%, transparent); border-radius:4px;">phantom_generate_login</code> via MCP.</p>
     </div>
   </section>
 
@@ -235,22 +314,26 @@ document.getElementById('footer-time').textContent=new Date().toISOString();
       roleEl.textContent = roleName ? roleName + " role" : "-";
     }
     if (badge) {
+      while (badge.firstChild) badge.removeChild(badge.firstChild);
+      var dot = document.createElement("span");
+      dot.className = "phantom-dot";
+      var label;
       if (data && data.status === "ok") {
         badge.className = "phantom-badge phantom-badge-success";
-        badge.innerHTML = '<span class="phantom-dot phantom-dot-live"></span> online';
+        dot.className = "phantom-dot phantom-dot-live";
+        label = "online";
       } else if (data && data.status === "degraded") {
         badge.className = "phantom-badge";
-        badge.innerHTML = '<span class="phantom-dot"></span> degraded';
+        label = "degraded";
       } else if (data && data.status) {
         badge.className = "phantom-badge";
-        badge.innerHTML = '<span class="phantom-dot"></span> ' + data.status;
+        label = String(data.status);
       } else {
-        // /health failed or returned no status. Reset to a neutral
-        // "unknown" state rather than leaving the initial "online"
-        // badge pinned on a page that cannot reach the agent.
         badge.className = "phantom-badge";
-        badge.innerHTML = '<span class="phantom-dot"></span> unknown';
+        label = "unknown";
       }
+      badge.appendChild(dot);
+      badge.appendChild(document.createTextNode(" " + label));
     }
   }
 
@@ -258,6 +341,186 @@ document.getElementById('footer-time').textContent=new Date().toISOString();
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(apply)
     .catch(function () { apply(null); });
+})();
+
+// Starter tiles ("What can <name> do?") fetched from /ui/api/starter-prompts.
+// Cardinal Rule: tile titles, descriptions, and prompts flow as bytes from the
+// server response to textContent and encodeURIComponent. No client-side
+// classification, no intent branching. The button just opens /chat with the
+// prompt pre-filled; the agent decides what to do once the user hits send.
+(function () {
+  var ICONS = {
+    chart: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125C16.5 3.504 17.004 3 17.625 3h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"/></svg>',
+    git: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 6a4.5 4.5 0 0 1 9 0v.75a4.5 4.5 0 0 1-9 0V6ZM7.5 15.75a4.5 4.5 0 0 1 9 0V18a4.5 4.5 0 0 1-9 0v-2.25ZM12 10.5v3"/></svg>',
+    inbox: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z"/></svg>',
+    metrics: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h15M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h15M3.75 3h15m-12 3-3 3 3 3m6-3h6m-9 7.5 3-3-3-3"/></svg>',
+    alert: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"/></svg>',
+    calendar: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"/></svg>',
+    search: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>',
+    globe: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418"/></svg>',
+    generic: '<svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><circle cx="12" cy="12" r="9"/></svg>'
+  };
+
+  function iconSvg(name) {
+    return ICONS[name] || ICONS.generic;
+  }
+
+  function renderArrow() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("stroke-width", "1.8");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "m8.25 4.5 7.5 7.5-7.5 7.5");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function renderTile(tile) {
+    var article = document.createElement("article");
+    article.className = "phantom-tile";
+
+    var iconWrap = document.createElement("div");
+    iconWrap.className = "phantom-tile-icon";
+    iconWrap.setAttribute("aria-hidden", "true");
+    // Icon SVG is our own asset keyed by name, not operator content, so it is
+    // safe to assign via innerHTML. Titles, descriptions, and prompts below
+    // always flow through textContent or encodeURIComponent.
+    iconWrap.innerHTML = iconSvg(String(tile && tile.icon));
+    article.appendChild(iconWrap);
+
+    var h3 = document.createElement("h3");
+    h3.className = "phantom-tile-title";
+    h3.textContent = String(tile && tile.title != null ? tile.title : "");
+    article.appendChild(h3);
+
+    var desc = document.createElement("p");
+    desc.className = "phantom-tile-desc";
+    desc.textContent = String(tile && tile.description != null ? tile.description : "");
+    article.appendChild(desc);
+
+    var cta = document.createElement("a");
+    cta.className = "phantom-button phantom-button-ghost phantom-button-sm phantom-tile-cta";
+    var rawPrompt = tile && tile.prompt != null ? String(tile.prompt) : "";
+    cta.setAttribute("href", "/chat?prefill=" + encodeURIComponent(rawPrompt));
+    cta.appendChild(document.createTextNode("Ask now "));
+    cta.appendChild(renderArrow());
+    article.appendChild(cta);
+
+    return article;
+  }
+
+  function render(tiles) {
+    var grid = document.getElementById("phantom-starter-tiles");
+    if (!grid) return;
+    while (grid.firstChild) grid.removeChild(grid.firstChild);
+    grid.removeAttribute("aria-busy");
+    if (!Array.isArray(tiles) || tiles.length === 0) {
+      var section = grid.parentElement;
+      if (section) section.style.display = "none";
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < tiles.length; i++) {
+      frag.appendChild(renderTile(tiles[i]));
+    }
+    grid.appendChild(frag);
+  }
+
+  fetch("/ui/api/starter-prompts", { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { render(d && d.tiles); })
+    .catch(function () {
+      var grid = document.getElementById("phantom-starter-tiles");
+      if (grid && grid.parentElement) grid.parentElement.style.display = "none";
+    });
+})();
+
+// Pages list ("Pages <name> has created for you") fetched from /ui/api/pages.
+// Empty state deep-links to /chat with a prefilled "build me a dashboard"
+// prompt. All titles flow through textContent so agent-written <title> text
+// cannot inject markup.
+(function () {
+  function relativeTime(iso) {
+    var then = Date.parse(iso);
+    if (Number.isNaN(then)) return "";
+    var diffSec = Math.floor((Date.now() - then) / 1000);
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + "m ago";
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + "h ago";
+    if (diffSec < 172800) return "yesterday";
+    if (diffSec < 2592000) return Math.floor(diffSec / 86400) + "d ago";
+    return new Date(then).toISOString().split("T")[0];
+  }
+
+  function renderRow(page) {
+    var row = document.createElement("a");
+    row.className = "phantom-page-row";
+    row.setAttribute("href", String(page && page.path ? page.path : "#"));
+
+    var pathSpan = document.createElement("span");
+    pathSpan.className = "phantom-page-path";
+    pathSpan.textContent = String(page && page.path != null ? page.path : "");
+    row.appendChild(pathSpan);
+
+    var titleSpan = document.createElement("span");
+    titleSpan.className = "phantom-page-title";
+    titleSpan.textContent = String(page && page.title != null ? page.title : "");
+    row.appendChild(titleSpan);
+
+    var timeSpan = document.createElement("span");
+    timeSpan.className = "phantom-page-time";
+    timeSpan.textContent = String(page && page.modified_at ? relativeTime(page.modified_at) : "");
+    row.appendChild(timeSpan);
+
+    return row;
+  }
+
+  function renderEmpty(container) {
+    container.removeAttribute("aria-busy");
+    while (container.firstChild) container.removeChild(container.firstChild);
+    var empty = document.createElement("div");
+    empty.className = "phantom-empty";
+    empty.appendChild(document.createTextNode("No pages yet. Ask "));
+    var nameSpan = document.createElement("span");
+    nameSpan.setAttribute("data-agent-name", "");
+    nameSpan.textContent = document.querySelector("[data-agent-name]") && document.querySelector("[data-agent-name]").textContent || "Phantom";
+    empty.appendChild(nameSpan);
+    empty.appendChild(document.createTextNode(" in chat: "));
+    var link = document.createElement("a");
+    var prompt = "Build me a dashboard that shows the three things I care about this week.";
+    link.setAttribute("href", "/chat?prefill=" + encodeURIComponent(prompt));
+    link.textContent = "\u201Cbuild me a dashboard that shows \u2026\u201D";
+    empty.appendChild(link);
+    container.appendChild(empty);
+  }
+
+  function render(pages) {
+    var list = document.getElementById("phantom-pages-list");
+    if (!list) return;
+    list.removeAttribute("aria-busy");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!Array.isArray(pages) || pages.length === 0) {
+      renderEmpty(list);
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < pages.length; i++) {
+      frag.appendChild(renderRow(pages[i]));
+    }
+    list.appendChild(frag);
+  }
+
+  fetch("/ui/api/pages", { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { render(d && d.pages); })
+    .catch(function () { render([]); });
 })();
 </script>
 </body>

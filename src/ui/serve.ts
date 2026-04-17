@@ -6,13 +6,18 @@ import { loginPageHtml } from "./login-page.ts";
 import { consumeMagicLink, createSession, isValidSession } from "./session.ts";
 
 import type { AgentRuntime } from "../agent/runtime.ts";
+import type { EvolutionEngine } from "../evolution/engine.ts";
+import type { EvolutionQueue } from "../evolution/queue.ts";
+import type { MemorySystem } from "../memory/system.ts";
 import type { ParseResult } from "../scheduler/parse-with-sonnet.ts";
 import type { Scheduler } from "../scheduler/service.ts";
 import { secretsExpiredHtml, secretsFormHtml } from "../secrets/form-page.ts";
 import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/store.ts";
 import { handleCostApi } from "./api/cost.ts";
+import { handleEvolutionApi } from "./api/evolution.ts";
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
+import { handleMemoryApi } from "./api/memory.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
 import { handleSchedulerApi } from "./api/scheduler.ts";
 import { handleSessionsApi } from "./api/sessions.ts";
@@ -31,6 +36,9 @@ let schedulerInstance: Scheduler | null = null;
 let schedulerRuntime: AgentRuntime | null = null;
 let schedulerParserOverride: ((description: string) => Promise<ParseResult>) | null = null;
 let pluginsApiOverrides: Pick<PluginsApiDeps, "fetcher" | "settingsPath" | "overlayPath"> = {};
+let evolutionEngine: EvolutionEngine | null = null;
+let evolutionQueue: EvolutionQueue | null = null;
+let memorySystem: MemorySystem | null = null;
 
 type SecretSavedCallback = (requestId: string, secretNames: string[]) => Promise<void>;
 let onSecretSaved: SecretSavedCallback | null = null;
@@ -56,6 +64,36 @@ export function clearSchedulerInstanceForTests(): void {
 	schedulerInstance = null;
 	schedulerRuntime = null;
 	schedulerParserOverride = null;
+}
+
+export function setEvolutionEngine(engine: EvolutionEngine): void {
+	evolutionEngine = engine;
+}
+
+export function setEvolutionQueue(queue: EvolutionQueue): void {
+	evolutionQueue = queue;
+}
+
+export function clearEvolutionForTests(): void {
+	evolutionEngine = null;
+	evolutionQueue = null;
+}
+
+export function setEvolutionEngineForTests(engine: EvolutionEngine, queue?: EvolutionQueue): void {
+	evolutionEngine = engine;
+	evolutionQueue = queue ?? null;
+}
+
+export function setMemorySystem(memory: MemorySystem): void {
+	memorySystem = memory;
+}
+
+export function clearMemorySystemForTests(): void {
+	memorySystem = null;
+}
+
+export function setMemorySystemForTests(memory: MemorySystem): void {
+	memorySystem = memory;
 }
 
 // Test-only seam. Production wiring leaves this null so the handler falls
@@ -268,6 +306,23 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			runtime: schedulerRuntime,
 			...(schedulerParserOverride ? { parser: schedulerParserOverride } : {}),
 		});
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/evolution")) {
+		if (!evolutionEngine) {
+			return Response.json({ error: "Evolution engine not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleEvolutionApi(req, url, {
+			engine: evolutionEngine,
+			queue: evolutionQueue,
+		});
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/memory/")) {
+		if (!memorySystem) {
+			return Response.json({ error: "Memory system not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleMemoryApi(req, url, { memory: memorySystem });
 		if (apiResponse) return apiResponse;
 	}
 

@@ -61,6 +61,9 @@ import { closePreviewResources, createPreviewToolServer, getOrCreatePreviewConte
 import {
 	setBootstrapDb,
 	setDashboardDb,
+	setEvolutionEngine,
+	setEvolutionQueue,
+	setMemorySystem,
 	setPublicDir,
 	setSchedulerInstance,
 	setSecretSavedCallback,
@@ -112,6 +115,7 @@ async function main(): Promise<void> {
 	await memory.initialize();
 
 	setMemoryHealthProvider(() => memory.healthCheck());
+	setMemorySystem(memory);
 
 	// Runtime is created before evolution so we can wire it into the engine.
 	// Evolution judges run through the same Agent SDK subprocess as the main
@@ -136,6 +140,8 @@ async function main(): Promise<void> {
 		const cadenceConfig = loadCadenceConfig(engine.getEvolutionConfig());
 		evolutionCadence = new EvolutionCadence(engine, queue, engine.getEvolutionConfig(), cadenceConfig);
 		engine.setQueueWiring(queue, () => evolutionCadence?.onEnqueue());
+		setEvolutionEngine(engine);
+		setEvolutionQueue(queue);
 		// The cadence drains the queue out-of-band, so the runtime's in-memory
 		// evolved config snapshot must be refreshed from disk after each
 		// applied change. Without this callback the queued path would rewrite

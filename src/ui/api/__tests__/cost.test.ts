@@ -84,13 +84,26 @@ function seedCostEvent(
 		);
 }
 
+// When h < 24, clamp the result to the same UTC date as "now" so the test is
+// stable across the UTC-day boundary. hoursAgo(3) run at 02:53 UTC would
+// otherwise resolve to 23:53 the previous day, which SQLite's
+// date(created_at) = date('now') would then bucket as yesterday instead of
+// today. For h >= 24 (daysAgo callers), the caller intends to cross the
+// boundary, so no clamp.
 function hoursAgo(h: number): string {
-	const d = new Date(Date.now() - h * 3600 * 1000);
-	return d.toISOString().replace("T", " ").slice(0, 19);
+	const now = new Date();
+	const requested = new Date(now.getTime() - h * 3600 * 1000);
+	if (h < 24 && requested.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10)) {
+		// Clamp to 5 minutes ago so the event is unambiguously today.
+		const clamped = new Date(now.getTime() - 5 * 60 * 1000);
+		return clamped.toISOString().replace("T", " ").slice(0, 19);
+	}
+	return requested.toISOString().replace("T", " ").slice(0, 19);
 }
 
 function daysAgo(d: number): string {
-	return hoursAgo(d * 24);
+	const ts = new Date(Date.now() - d * 24 * 3600 * 1000);
+	return ts.toISOString().replace("T", " ").slice(0, 19);
 }
 
 beforeEach(() => {

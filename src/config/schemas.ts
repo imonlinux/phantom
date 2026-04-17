@@ -8,6 +8,35 @@ export const PeerConfigSchema = z.object({
 	enabled: z.boolean().default(true),
 });
 
+// Operator-tunable permissions. Moved out of ~/.claude/settings.json in v0.20
+// PR 6 so the dashboard Settings page is the single authoritative surface for
+// tool access control. The runtime applies these at query time via the Agent
+// SDK subprocess; nothing else reads them. Keep the enum trimmed to the three
+// modes that actually match a real operator intent (default / acceptEdits /
+// bypassPermissions). SDK-level modes like `plan` and `dontAsk` stayed off the
+// dashboard because nobody has ever asked for them.
+export const PermissionsConfigSchema = z
+	.object({
+		default_mode: z.enum(["default", "acceptEdits", "bypassPermissions"]).default("bypassPermissions"),
+		allow: z.array(z.string().min(1)).default([]),
+		deny: z.array(z.string().min(1)).default([]),
+	})
+	.default({});
+
+// Operator-tunable evolution cadence. `reflection_enabled` mirrors the enum at
+// `config/evolution.yaml:reflection.enabled`; the two other knobs mirror the
+// runtime overlay at `phantom-config/meta/evolution.json`. The phantom-config
+// endpoint is responsible for writing the cadence overlay AND updating the
+// running EvolutionCadence instance via setCadenceConfig() so changes are
+// live without a restart.
+export const EvolutionUiConfigSchema = z
+	.object({
+		reflection_enabled: z.enum(["auto", "always", "never"]).default("auto"),
+		cadence_minutes: z.number().int().min(1).max(10080).default(180),
+		demand_trigger_depth: z.number().int().min(1).max(1000).default(5),
+	})
+	.default({});
+
 export const PhantomConfigSchema = z.object({
 	// name feeds the email from-address local-part, subject line, HTML body,
 	// PWA manifest, browser title, and Slack display name. Restrict to a
@@ -41,6 +70,10 @@ export const PhantomConfigSchema = z.object({
 	max_budget_usd: z.number().min(0).default(0),
 	timeout_minutes: z.number().min(1).default(240),
 	peers: z.record(z.string(), PeerConfigSchema).optional(),
+	// Added in v0.20 PR 6. Both are optional on disk so existing phantom.yaml
+	// files without these blocks keep loading; defaults fill in at parse time.
+	permissions: PermissionsConfigSchema,
+	evolution: EvolutionUiConfigSchema,
 });
 
 export const SlackChannelConfigSchema = z.object({

@@ -15,6 +15,7 @@ import { type AgentCost, type AgentResponse, emptyCost } from "./events.ts";
 import { createDangerousCommandBlocker, createFileTracker } from "./hooks.ts";
 import { extractTextFromMessageParam } from "./message-param-utils.ts";
 import { extractCost, extractTextFromMessage } from "./message-utils.ts";
+import { permissionOptionsFromConfig } from "./permission-options.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import type { Session, SessionStore } from "./session-store.ts";
 
@@ -91,12 +92,12 @@ export async function executeChatQuery(
 	}
 
 	const runSdk = async (useResume: boolean): Promise<void> => {
+		const permissionOptions = permissionOptionsFromConfig(deps.config);
 		const queryStream = query({
 			prompt: makePrompt(),
 			options: {
 				model: deps.config.model,
-				permissionMode: "bypassPermissions",
-				allowDangerouslySkipPermissions: true,
+				...permissionOptions,
 				settingSources: ["project", "user"],
 				systemPrompt: {
 					type: "preset" as const,

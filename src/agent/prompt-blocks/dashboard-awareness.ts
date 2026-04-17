@@ -31,7 +31,7 @@ export function buildDashboardAwarenessLines(publicUrl: string | undefined): str
 		`- Hooks: ${hooksUrl} (visual rule builder over 26 SDK events in ~/.claude/settings.json; command, prompt, agent, http types; live on next message).`,
 	);
 	lines.push(
-		`- Settings: ${settingsUrl} (curated form over settings.json; permissions, model, MCP, memory, sandbox, UI; unsafe fields hidden; diff-based writes preserve untouched fields byte-for-byte).`,
+		`- Settings: ${settingsUrl} (operator-facing form over phantom.yaml; six sections: identity, model + cost, evolution cadence, channels, memory, tool permissions; atomic writes, audited).`,
 	);
 	lines.push("");
 	lines.push(

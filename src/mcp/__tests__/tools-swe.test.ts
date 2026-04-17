@@ -134,6 +134,8 @@ describe("SWE MCP Tools", () => {
 					effort: "max" as const,
 					max_budget_usd: 0,
 					timeout_minutes: 240,
+					permissions: { default_mode: "bypassPermissions", allow: [], deny: [] },
+					evolution: { reflection_enabled: "auto", cadence_minutes: 180, demand_trigger_depth: 5 },
 				},
 				db,
 				startedAt: Date.now(),

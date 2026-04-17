@@ -373,4 +373,12 @@ export const MIGRATIONS: string[] = [
 	)`,
 
 	"CREATE INDEX IF NOT EXISTS idx_scheduler_audit_log_job ON scheduler_audit_log(job_id, id DESC)",
+
+	// PR6 dashboard: the Settings page is moving from ~/.claude/settings.json
+	// to config/phantom.yaml. Rows written by the new phantom-config endpoint
+	// carry a section tag (identity, model_cost, evolution, channels, memory,
+	// permissions) so the UI can group history by section without string
+	// matching. Existing rows remain NULL for `section`; they render under a
+	// "legacy" label in the audit drawer.
+	"ALTER TABLE settings_audit_log ADD COLUMN section TEXT",
 ];

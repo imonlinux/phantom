@@ -16,6 +16,7 @@ import { emitPluginInitSnapshot } from "./init-plugin-snapshot.ts";
 import { type JudgeQueryOptions, type JudgeQueryResult, runJudgeQuery } from "./judge-query.ts";
 import { wrapMessageContent } from "./message-param-utils.ts";
 import { extractCost, extractTextFromMessage } from "./message-utils.ts";
+import { permissionOptionsFromConfig } from "./permission-options.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import { SessionStore } from "./session-store.ts";
 
@@ -195,12 +196,12 @@ export class AgentRuntime {
 		const providerEnv = buildProviderEnv(this.config);
 
 		const runSdkQuery = async (useResume: boolean): Promise<void> => {
+			const permissionOptions = permissionOptionsFromConfig(this.config);
 			const queryStream = query({
 				prompt: text,
 				options: {
 					model: this.config.model,
-					permissionMode: "bypassPermissions",
-					allowDangerouslySkipPermissions: true,
+					...permissionOptions,
 					settingSources: ["project", "user"],
 					systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: appendPrompt },
 					persistSession: true,

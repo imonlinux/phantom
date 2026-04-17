@@ -1498,7 +1498,9 @@ body {
 .dash-audit-row-top { font-size: 12px; }
 .dash-audit-row-body { font-size: 11px; color: color-mix(in oklab, var(--color-base-content) 60%, transparent); margin-top: 4px; }
 
-/* Settings tab (PR3): grouped sections and a bottom save bar. */
+/* Settings tab (PR3 / v0.20 PR6): grouped sections over phantom.yaml with
+   per-section save + discard actions, per-field inline error slots, and a
+   collapsible audit history drawer. */
 .dash-settings-section {
 	border: 1px solid var(--color-base-300);
 	border-radius: var(--radius-lg);
@@ -1507,6 +1509,56 @@ body {
 	margin-bottom: var(--space-4);
 }
 .dash-settings-section header { margin-bottom: var(--space-3); }
+.dash-settings-section-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--color-base-300);
+}
+.dash-field-error {
+	font-size: 12px;
+	color: var(--color-error, #b91c1c);
+	margin-top: 4px;
+	line-height: 1.45;
+}
+.dash-settings-history {
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-lg);
+	background: var(--color-base-100);
+	padding: var(--space-3) var(--space-4);
+	margin-bottom: var(--space-4);
+}
+.dash-settings-history > summary {
+	cursor: pointer;
+	list-style: none;
+	padding: 2px 0;
+}
+.dash-settings-history > summary::-webkit-details-marker { display: none; }
+.dash-settings-history > summary::after {
+	content: "\25BE";
+	margin-left: var(--space-2);
+	font-size: 11px;
+	color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+	transition: transform var(--motion-base) var(--ease-out);
+	display: inline-block;
+}
+.dash-settings-history[open] > summary::after {
+	transform: rotate(180deg);
+}
+.dash-audit-list {
+	margin-top: var(--space-3);
+}
+@media (max-width: 720px) {
+	.dash-settings-section-actions {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	.dash-settings-section-actions .dash-btn {
+		width: 100%;
+	}
+}
 .dash-save-bar {
 	position: sticky;
 	bottom: 0;

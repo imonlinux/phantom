@@ -18,11 +18,10 @@ import { handleEvolutionApi } from "./api/evolution.ts";
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { handleMemoryApi } from "./api/memory.ts";
-import { handlePhantomConfigApi, type PhantomConfigPaths } from "./api/phantom-config.ts";
+import { type PhantomConfigPaths, handlePhantomConfigApi } from "./api/phantom-config.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
 import { handleSchedulerApi } from "./api/scheduler.ts";
 import { handleSessionsApi } from "./api/sessions.ts";
-import { handleSettingsApi } from "./api/settings.ts";
 import { handleSkillsApi } from "./api/skills.ts";
 import { handleSubagentsApi } from "./api/subagents.ts";
 
@@ -284,13 +283,6 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
 		}
 		const apiResponse = await handleHooksApi(req, url, { db: dashboardDb });
-		if (apiResponse) return apiResponse;
-	}
-	if (url.pathname.startsWith("/ui/api/settings")) {
-		if (!dashboardDb) {
-			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
-		}
-		const apiResponse = await handleSettingsApi(req, url, { db: dashboardDb });
 		if (apiResponse) return apiResponse;
 	}
 	if (url.pathname.startsWith("/ui/api/phantom-config")) {

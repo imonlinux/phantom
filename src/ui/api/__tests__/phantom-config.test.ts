@@ -158,7 +158,12 @@ describe("phantom-config API", () => {
 		const res = await handleUiRequest(req("/ui/api/phantom-config"));
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
-			config: { name: string; model: string; permissions: { allow: string[] }; channels: { slack: { enabled: boolean } } };
+			config: {
+				name: string;
+				model: string;
+				permissions: { allow: string[] };
+				channels: { slack: { enabled: boolean } };
+			};
 			audit: { last_modified_at: string | null; last_modified_by: string | null };
 		};
 		expect(body.config.name).toBe("phantom");
@@ -419,13 +424,10 @@ describe("phantom-config API", () => {
 
 	test("GET /audit returns rows newest-first with a bounded limit", async () => {
 		for (let i = 0; i < 25; i++) {
-			db.run("INSERT INTO settings_audit_log (field, previous_value, new_value, actor, section) VALUES (?, ?, ?, ?, ?)", [
-				`field_${i}`,
-				JSON.stringify(i),
-				JSON.stringify(i + 1),
-				"user",
-				"identity",
-			]);
+			db.run(
+				"INSERT INTO settings_audit_log (field, previous_value, new_value, actor, section) VALUES (?, ?, ?, ?, ?)",
+				[`field_${i}`, JSON.stringify(i), JSON.stringify(i + 1), "user", "identity"],
+			);
 		}
 		const res = await handleUiRequest(req("/ui/api/phantom-config/audit?limit=10"));
 		expect(res.status).toBe(200);
@@ -437,13 +439,10 @@ describe("phantom-config API", () => {
 
 	test("GET /audit caps limit at the hard ceiling", async () => {
 		for (let i = 0; i < 150; i++) {
-			db.run("INSERT INTO settings_audit_log (field, previous_value, new_value, actor, section) VALUES (?, ?, ?, ?, ?)", [
-				`f_${i}`,
-				null,
-				null,
-				"user",
-				"identity",
-			]);
+			db.run(
+				"INSERT INTO settings_audit_log (field, previous_value, new_value, actor, section) VALUES (?, ?, ?, ?, ?)",
+				[`f_${i}`, null, null, "user", "identity"],
+			);
 		}
 		const res = await handleUiRequest(req("/ui/api/phantom-config/audit?limit=500"));
 		expect(res.status).toBe(200);
@@ -458,9 +457,7 @@ describe("phantom-config API", () => {
 	});
 
 	test("POST on /phantom-config returns 405", async () => {
-		const res = await handleUiRequest(
-			req("/ui/api/phantom-config", { method: "POST", body: JSON.stringify({}) }),
-		);
+		const res = await handleUiRequest(req("/ui/api/phantom-config", { method: "POST", body: JSON.stringify({}) }));
 		expect(res.status).toBe(405);
 	});
 
@@ -501,7 +498,9 @@ describe("phantom-config API", () => {
 		expect(second.status).toBe(200);
 		const body = (await second.json()) as { config: { max_budget_usd: number } };
 		expect(body.config.max_budget_usd).toBe(200);
-		const rows = db.query("SELECT new_value FROM settings_audit_log ORDER BY id ASC").all() as Array<{ new_value: string }>;
+		const rows = db.query("SELECT new_value FROM settings_audit_log ORDER BY id ASC").all() as Array<{
+			new_value: string;
+		}>;
 		expect(rows.length).toBe(2);
 		expect(JSON.parse(rows[0].new_value)).toBe(100);
 		expect(JSON.parse(rows[1].new_value)).toBe(200);
@@ -514,9 +513,7 @@ describe("phantom-config API", () => {
 	});
 
 	test("Invalid JSON body on PUT returns 400", async () => {
-		const res = await handleUiRequest(
-			req("/ui/api/phantom-config", { method: "PUT", body: "{ not json" }),
-		);
+		const res = await handleUiRequest(req("/ui/api/phantom-config", { method: "PUT", body: "{ not json" }));
 		expect(res.status).toBe(400);
 	});
 });

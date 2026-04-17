@@ -87,7 +87,7 @@ If you are unsure whether something belongs in TypeScript or in a prompt, open a
 ## Running Tests
 
 ```bash
-# Run the full suite (1,799 tests)
+# Run the full suite (1,807 tests)
 bun test
 
 # Run a single test file

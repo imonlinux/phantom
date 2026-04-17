@@ -81,7 +81,7 @@ export class PhantomMcpServer {
 
 	private createMcpServer(): McpServer {
 		const server = new McpServer(
-			{ name: `phantom-${this.toolDeps.config.name}`, version: "0.20.0" },
+			{ name: `phantom-${this.toolDeps.config.name}`, version: "0.20.1" },
 			{ capabilities: { logging: {} } },
 		);
 

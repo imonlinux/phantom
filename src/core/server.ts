@@ -11,7 +11,7 @@ import { avatarUrlIfPresent, handleAvatarGet } from "../ui/api/identity.ts";
 import { handleUiRequest } from "../ui/serve.ts";
 import { type HealthPayload, renderHealthHtml } from "./health-page.ts";
 
-const VERSION = "0.20.0";
+const VERSION = "0.20.1";
 
 type ChatHandler = (req: Request) => Promise<Response | null>;
 

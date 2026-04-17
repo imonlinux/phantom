@@ -1,6 +1,6 @@
 # Phantom
 
-Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Web Chat/Telegram/Email/Webhook, and exposes all capabilities as an MCP server. 30,000+ lines of TypeScript, 1,799 tests, v0.20.0. Apache 2.0, repo at ghostwright/phantom.
+Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Web Chat/Telegram/Email/Webhook, and exposes all capabilities as an MCP server. 30,000+ lines of TypeScript, 1,807 tests, v0.20.1. Apache 2.0, repo at ghostwright/phantom.
 
 ## Tech Stack
 
@@ -42,7 +42,7 @@ If you find yourself writing a function that does something the agent can do bet
 
 ```bash
 bun install                          # Install dependencies
-bun test                             # Run 1,799 tests
+bun test                             # Run 1,807 tests
 bun run src/index.ts                 # Start the server
 bun run src/cli/main.ts init --yes   # Initialize config (reads env vars)
 bun run src/cli/main.ts doctor       # Check all subsystems

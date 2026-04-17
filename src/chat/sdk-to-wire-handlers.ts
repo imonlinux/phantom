@@ -39,44 +39,63 @@ export function handleAssistant(msg: Record<string, unknown>, ctx: TranslationCo
 
 		if (blockType === "text") {
 			const fullText = (block.text as string) ?? "";
-			const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
-			if (prevLen === 0) {
+			if (ctx.blockTypes.get(i) === "text") {
+				// Stream deltas already shipped this block. Emit a single reconcile
+				// frame so the client replaces the accumulated text with the
+				// canonical final text. No-op at the UI if they already match.
 				frames.push({
-					event: "message.text_start",
-					message_id: ctx.messageId,
+					event: "message.text_reconcile",
 					text_block_id: `tb_${ctx.turnIndex}_${i}`,
-					index: i,
+					full_text: fullText,
 				});
+				ctx.seenBlockLengths.set(i, fullText.length);
+			} else {
+				const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
+				if (prevLen === 0) {
+					frames.push({
+						event: "message.text_start",
+						message_id: ctx.messageId,
+						text_block_id: `tb_${ctx.turnIndex}_${i}`,
+						index: i,
+					});
+				}
+				if (fullText.length > prevLen) {
+					frames.push({
+						event: "message.text_delta",
+						text_block_id: `tb_${ctx.turnIndex}_${i}`,
+						delta: fullText.slice(prevLen),
+					});
+				}
+				ctx.seenBlockLengths.set(i, fullText.length);
 			}
-			if (fullText.length > prevLen) {
-				frames.push({
-					event: "message.text_delta",
-					text_block_id: `tb_${ctx.turnIndex}_${i}`,
-					delta: fullText.slice(prevLen),
-				});
-			}
-			ctx.seenBlockLengths.set(i, fullText.length);
 		} else if (blockType === "thinking" || blockType === "redacted_thinking") {
 			const thinkingText = (block.thinking as string) ?? "";
-			const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
-			const redacted = blockType === "redacted_thinking";
-			if (prevLen === 0) {
-				frames.push({
-					event: "message.thinking_start",
-					message_id: ctx.messageId,
-					thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
-					index: i,
-					redacted,
-				});
+			if (ctx.blockTypes.get(i) === "thinking") {
+				// Stream deltas already shipped this block via Map.set-idempotent
+				// updates in the client reducer. Skip redundant emission; the
+				// Map entry already holds the authoritative text.
+				ctx.seenBlockLengths.set(i, thinkingText.length);
+			} else {
+				const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
+				const redacted = blockType === "redacted_thinking";
+				if (prevLen === 0) {
+					frames.push({
+						event: "message.thinking_start",
+						message_id: ctx.messageId,
+						thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
+						index: i,
+						redacted,
+					});
+				}
+				if (!redacted && thinkingText.length > prevLen) {
+					frames.push({
+						event: "message.thinking_delta",
+						thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
+						delta: thinkingText.slice(prevLen),
+					});
+				}
+				ctx.seenBlockLengths.set(i, thinkingText.length);
 			}
-			if (!redacted && thinkingText.length > prevLen) {
-				frames.push({
-					event: "message.thinking_delta",
-					thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
-					delta: thinkingText.slice(prevLen),
-				});
-			}
-			ctx.seenBlockLengths.set(i, thinkingText.length);
 		} else if (blockType === "tool_use") {
 			const toolId = (block.id as string) ?? `tool_${i}`;
 			if (!ctx.startedToolIds.has(toolId)) {

@@ -5,3 +5,10 @@ slack:
   # default_channel_id: C04ABC123
   # default_user_id: U04ABC123
   owner_user_id: ${OWNER_SLACK_USER_ID}
+
+# nextcloud:
+#  enabled: true
+#  shared_secret: ${NEXTCLOUD_SHARED_SECRET}
+#  talk_server: ${TALK_SERVER}
+#  room_token: ${ROOM_TOKEN}
+#  webhook_path: /nextcloud/webhook

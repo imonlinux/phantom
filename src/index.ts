@@ -7,6 +7,7 @@ import type { RuntimeEvent } from "./agent/runtime.ts";
 import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
 import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
+import { NextcloudChannel } from "./channels/nextcloud.ts";
 import { formatToolActivity } from "./channels/progress-stream.ts";
 import { createProgressStream } from "./channels/progress-stream.ts";
 import { ChannelRouter } from "./channels/router.ts";
@@ -370,6 +371,19 @@ async function main(): Promise<void> {
 		console.log("[phantom] Webhook channel registered");
 	}
 
+	// Register Nextcloud channel
+	let nextcloudChannel: NextcloudChannel | null = null;
+	if (channelsConfig?.nextcloud?.enabled && channelsConfig.nextcloud.shared_secret) {
+		nextcloudChannel = new NextcloudChannel({
+			sharedSecret: channelsConfig.nextcloud.shared_secret,
+			talkServer: channelsConfig.nextcloud.talk_server,
+			roomToken: channelsConfig.nextcloud.room_token,
+			webhookPath: channelsConfig.nextcloud.webhook_path,
+		});
+		router.register(nextcloudChannel);
+		console.log("[phantom] Nextcloud channel registered");
+	}
+
 	// Register CLI channel (fallback for local dev)
 	if (!slackChannel && !telegramChannel) {
 		const cli = new CliChannel();
@@ -454,6 +468,7 @@ async function main(): Promise<void> {
 		if (telegramChannel) health.telegram = telegramChannel.isConnected();
 		if (emailChannel) health.email = emailChannel.isConnected();
 		if (webhookChannel) health.webhook = webhookChannel.isConnected();
+		if (nextcloudChannel) health.nextcloud = nextcloudChannel.isConnected();
 		return health;
 	});
 
@@ -489,10 +504,13 @@ async function main(): Promise<void> {
 
 		const isSlack = msg.channelId === "slack" && slackChannel && msg.metadata;
 		const isTelegram = msg.channelId === "telegram" && telegramChannel && msg.metadata;
+		const isNextcloud = msg.channelId === "nextcloud" && nextcloudChannel && msg.metadata;
 		const slackChannelId = isSlack ? (msg.metadata?.slackChannel as string) : null;
 		const slackThreadTs = isSlack ? (msg.metadata?.slackThreadTs as string) : null;
 		const slackMessageTs = isSlack ? (msg.metadata?.slackMessageTs as string) : null;
 		const telegramChatId = isTelegram ? (msg.metadata?.telegramChatId as number) : null;
+		const nextcloudRoomToken = isNextcloud ? (msg.metadata?.nextcloudRoomToken as string) : null;
+		const nextcloudMessageId = isNextcloud ? (msg.metadata?.nextcloudMessageId as number) : null;
 
 		// Slack: set up status reactions on the user's message
 		let statusReactions: ReturnType<typeof createStatusReactionController> | null = null;
@@ -540,6 +558,11 @@ async function main(): Promise<void> {
 			telegramChannel.startTyping(telegramChatId);
 		}
 
+		// Nextcloud: set initial reaction
+		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
+			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
+		}
+
 		const response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
 			switch (event.type) {
 				case "init":
@@ -578,6 +601,13 @@ async function main(): Promise<void> {
 			telegramChannel.stopTyping(telegramChatId);
 		}
 
+		// Nextcloud: finalize reactions
+		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
+			await nextcloudChannel.clearMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
+			const finalReaction = response.text.startsWith("Error:") ? "error" : "done";
+			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, finalReaction);
+		}
+
 		// Deliver the response
 		if (progressStream) {
 			// Slack: update the progress message with the final response + feedback buttons
@@ -590,9 +620,12 @@ async function main(): Promise<void> {
 			}
 		} else {
 			// All other channels: send via router
+			// For Nextcloud, pass the original message ID as replyToId for threading
+			const replyToId = isNextcloud && nextcloudMessageId ? String(nextcloudMessageId) : undefined;
 			await router.send(msg.channelId, msg.conversationId, {
 				text: response.text,
 				threadId: msg.threadId,
+				replyToId,
 			});
 		}
 

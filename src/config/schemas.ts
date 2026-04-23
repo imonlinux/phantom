@@ -116,11 +116,20 @@ export const WebhookChannelConfigSchema = z.object({
 	sync_timeout_ms: z.number().int().min(1000).default(25000),
 });
 
+export const NextcloudChannelConfigSchema = z.object({
+	enabled: z.boolean().default(false),
+	shared_secret: z.string().min(16),
+	talk_server: z.string().min(1),
+	room_token: z.string().min(1),
+	webhook_path: z.string().default("/nextcloud/webhook"),
+});
+
 export const ChannelsConfigSchema = z.object({
 	slack: SlackChannelConfigSchema.optional(),
 	telegram: TelegramChannelConfigSchema.optional(),
 	email: EmailChannelConfigSchema.optional(),
 	webhook: WebhookChannelConfigSchema.optional(),
+	nextcloud: NextcloudChannelConfigSchema.optional(),
 });
 
 export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;

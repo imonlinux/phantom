@@ -565,27 +565,41 @@ async function main(): Promise<void> {
 
 		// Fix #11: Track error events instead of text sniffing
 		let hadErrorEvent = false;
-		const response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
-			switch (event.type) {
-				case "init":
-					console.log(`\n[phantom] Session: ${event.sessionId}`);
-					break;
-				case "thinking":
-					statusReactions?.setThinking();
-					break;
-				case "tool_use":
-					statusReactions?.setTool(event.tool);
-					if (progressStream) {
-						const summary = formatToolActivity(event.tool, event.input);
-						progressStream.addToolActivity(event.tool, summary);
-					}
-					break;
-				case "error":
-					hadErrorEvent = true;
-					statusReactions?.setError();
-					break;
+		let response: AgentResponse;
+
+		try {
+			// Fix #C: Wrap in try/finally to ensure thinking reaction is always cleared
+			response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
+				switch (event.type) {
+					case "init":
+						console.log(`\n[phantom] Session: ${event.sessionId}`);
+						break;
+					case "thinking":
+						statusReactions?.setThinking();
+						break;
+					case "tool_use":
+						statusReactions?.setTool(event.tool);
+						if (progressStream) {
+							const summary = formatToolActivity(event.tool, event.input);
+							progressStream.addToolActivity(event.tool, summary);
+						}
+						break;
+					case "error":
+						hadErrorEvent = true;
+						statusReactions?.setError();
+						break;
+				}
+			});
+		} finally {
+			// Fix #C: Always clear the thinking reaction for Nextcloud, even on error
+			if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
+				try {
+					await nextcloudChannel.clearMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
+				} catch {
+					// Ignore if already cleared or message deleted
+				}
 			}
-		});
+		}
 
 		// Track assistant messages
 		if (response.text) {
@@ -593,7 +607,9 @@ async function main(): Promise<void> {
 		}
 
 		// Fix #11: Use error event flag instead of text sniffing
-		if (hadErrorEvent) {
+		// Fix #D: Belt-and-suspenders - some error paths in runtime don't emit events
+		const isError = hadErrorEvent || response.text.startsWith("Error:");
+		if (isError) {
 			await statusReactions?.setError();
 		} else {
 			await statusReactions?.setDone();
@@ -604,10 +620,10 @@ async function main(): Promise<void> {
 			telegramChannel.stopTyping(telegramChatId);
 		}
 
-		// Fix #11: Use error event flag instead of text sniffing for Nextcloud reactions
+		// Fix #11: Set final Nextcloud reaction after successful processing
+		// Fix #D: Use combined error signal for reaction determination
 		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
-			await nextcloudChannel.clearMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
-			const finalReaction = hadErrorEvent ? "error" : "done";
+			const finalReaction = isError ? "error" : "done";
 			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, finalReaction);
 		}
 
@@ -655,7 +671,7 @@ async function main(): Promise<void> {
 				startedAt: sessionStartedAt,
 				endedAt: new Date().toISOString(),
 				costUsd: response.cost.totalUsd,
-				outcome: hadErrorEvent ? "failure" : "success", // Fix #11: Use error event flag
+				outcome: isError ? "failure" : "success", // Fix #11+#D: Use combined error signal
 			};
 
 			// Phase 3 simplified memory consolidation: the Phase 1+2 LLM judge
@@ -689,7 +705,7 @@ async function main(): Promise<void> {
 				assistant_messages: existing.assistant,
 				tools_used: [],
 				files_tracked: trackedFiles,
-				outcome: hadErrorEvent ? "failure" : "success", // Fix #11: Use error event flag
+				outcome: isError ? "failure" : "success", // Fix #11+#D: Use combined error signal
 				cost_usd: response.cost.totalUsd,
 				started_at: sessionStartedAt,
 				ended_at: new Date().toISOString(),

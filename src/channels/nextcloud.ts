@@ -74,11 +74,6 @@ export class NextcloudChannel implements Channel {
 			webhookPath: config.webhookPath ?? "/nextcloud/webhook",
 			port: config.port ?? 3200,
 		};
-
-		// Start periodic nonce cache pruning (Fix #1)
-		this.nonceCachePruneTimer = setInterval(() => {
-			this.pruneNonces();
-		}, 60 * 1000); // Prune every minute
 	}
 
 	async connect(): Promise<void> {
@@ -94,6 +89,11 @@ export class NextcloudChannel implements Channel {
 				port,
 				fetch: (req) => this.handleWebRequest(req, webhookPath),
 			});
+
+			// Fix #2: Start periodic nonce cache pruning when connected
+			this.nonceCachePruneTimer = setInterval(() => {
+				this.pruneNonces();
+			}, 60 * 1000); // Prune every minute
 
 			this.connectionState = "connected";
 			console.log(`[nextcloud] Webhook server listening on :${port}${webhookPath}`);
@@ -144,7 +144,7 @@ export class NextcloudChannel implements Channel {
 
 	// Fix #1: Add nonce to cache
 	private addNonce(nonce: string): void {
-		// Enforce cache size limit (LRU eviction)
+		// Enforce cache size limit (FIFO eviction - insertion order)
 		if (this.nonceCache.size >= MAX_NONCE_CACHE_SIZE) {
 			// Remove oldest entry (first key in Map)
 			const firstKey = this.nonceCache.keys().next().value;
@@ -326,7 +326,7 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		// Fix #12: Improved bot loop guard - check both actorType and actorId
+		// Fix #12: Bot loop guard - ignore messages from applications/bots
 		if (actorType === "Application") {
 			return { status: 200, error: undefined };
 		}
@@ -400,7 +400,7 @@ export class NextcloudChannel implements Channel {
 		// - INBOUND verification: HMAC(random + full_body, secret)
 		// - OUTBOUND requests: HMAC(random + content_only, secret)
 		// This is the #1 cause of 401 errors in Talk bot implementations.
-		// See: https://github.com/nextcloud/server/issues/12345
+		// See: https://nextcloud-talk.readthedocs.io/en/latest/bots/
 		const hmac = createHmac("sha256", this.config.sharedSecret);
 		hmac.update(random);
 		hmac.update(content);
@@ -460,17 +460,24 @@ export class NextcloudChannel implements Channel {
 
 				// Handle specific error codes
 				if (res.status === 429) {
-					// Rate limited - check Retry-After header
-					const retryAfter = res.headers.get("Retry-After");
-					const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
-					console.log(`[nextcloud] Rate limited, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
-					await this.sleep(delayMs);
-					continue;
+					if (attempt < maxRetries - 1) {
+						// Rate limited - check Retry-After header
+						const retryAfter = res.headers.get("Retry-After");
+						const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+						console.log(`[nextcloud] Rate limited, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+						await this.sleep(delayMs);
+						continue;
+					} else {
+						// Final attempt - all retries exhausted
+						console.error(`[nextcloud] Rate limited, all ${maxRetries} retries exhausted`);
+						return false;
+					}
 				}
 
 				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
-					// Server error - retry with exponential backoff
-					const delayMs = 1000 * Math.pow(2, attempt);
+					// Server error - retry with exponential backoff plus jitter
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
 					console.log(`[nextcloud] Server error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
 					await this.sleep(delayMs);
 					continue;
@@ -483,7 +490,8 @@ export class NextcloudChannel implements Channel {
 			} catch (err) {
 				lastError = err instanceof Error ? err : new Error(String(err));
 				if (attempt < maxRetries - 1) {
-					const delayMs = 1000 * Math.pow(2, attempt);
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
 					console.log(`[nextcloud] Network error, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
 					await this.sleep(delayMs);
 				}
@@ -554,8 +562,9 @@ export class NextcloudChannel implements Channel {
 				}
 
 				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
-					// Server error - retry with exponential backoff
-					const delayMs = 1000 * Math.pow(2, attempt);
+					// Server error - retry with exponential backoff plus jitter
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
 					console.log(`[nextcloud] Reaction error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
 					await this.sleep(delayMs);
 					continue;
@@ -567,7 +576,8 @@ export class NextcloudChannel implements Channel {
 				return false;
 			} catch (err) {
 				if (attempt < maxRetries - 1) {
-					const delayMs = 1000 * Math.pow(2, attempt);
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
 					console.log(`[nextcloud] Network error setting reaction, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
 					await this.sleep(delayMs);
 				} else {

@@ -11,6 +11,7 @@
 
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import type { SessionStore } from "../agent/session-store.ts";
 
 export type NextcloudChannelConfig = {
 	sharedSecret: string;
@@ -18,6 +19,7 @@ export type NextcloudChannelConfig = {
 	roomToken: string;
 	webhookPath?: string;
 	port?: number;
+	sessionWindowMinutes?: number;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -67,14 +69,18 @@ export class NextcloudChannel implements Channel {
 	// Fix #1: Replay attack protection
 	private nonceCache: Map<string, NonceEntry> = new Map();
 	private nonceCachePruneTimer: ReturnType<typeof setInterval> | null = null;
+	// Session store for time-window coalescing
+	private sessionStore: SessionStore | null = null;
 
-	constructor(config: NextcloudChannelConfig) {
+	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
 		this.config = {
 			...config,
 			webhookPath: config.webhookPath ?? "/nextcloud/webhook",
 			port: config.port ?? 3200,
+			sessionWindowMinutes: config.sessionWindowMinutes ?? 30,
 		};
+		this.sessionStore = sessionStore ?? null;
 	}
 
 	async connect(): Promise<void> {
@@ -345,20 +351,40 @@ export class NextcloudChannel implements Channel {
 		const msgIdNum = typeof object?.id === "number" ? object.id : typeof object?.id === "string" ? parseInt(object.id, 10) : NaN;
 		const msgId = !isNaN(msgIdNum) ? msgIdNum : undefined;
 
-
-		// Fix: Scope session by thread. If the Talk payload includes a parentMessageId,
-		// the message is a reply in an existing thread; scope to the thread root.
-		// Otherwise treat the message itself as the thread root so each new
-		// top-level conversation becomes its own session.
+		// Fix: Time-window coalescing for session continuity
+		// If the Talk payload includes a parentMessageId (explicit reply),
+		// use the parent's ID as the thread root. Otherwise check for a
+		// recent active session in this room within the configured window
+		// (default 30 minutes) to continue the prior conversation.
 		const parentMessageIdNum = typeof object?.parentMessageId === "number"
 			? object.parentMessageId
 			: typeof object?.parentMessageId === "string"
 				? parseInt(object.parentMessageId, 10)
 				: NaN;
 		const parentMessageId = !isNaN(parentMessageIdNum) ? parentMessageIdNum : undefined;
-		const threadRoot = parentMessageId !== undefined
-			? parentMessageId
-			: (msgId ?? "room");
+
+		let threadRoot: number | string;
+		if (parentMessageId !== undefined) {
+			// Explicit reply — use the parent as the thread root
+			threadRoot = parentMessageId;
+		} else {
+			// Top-level message — check for a recent active session in this room
+			const sessionWindowMs = (this.config.sessionWindowMinutes ?? 30) * 60 * 1000;
+			const recent = this.sessionStore?.findMostRecentActiveForChannel(
+				this.id,
+				`nextcloud:${roomToken}:`,
+				sessionWindowMs,
+			);
+			if (recent) {
+				// Continue the prior conversation by extracting its thread root
+				const prefix = `nextcloud:${roomToken}:`;
+				const suffix = recent.conversation_id.slice(prefix.length);
+				threadRoot = suffix;
+			} else {
+				// Start a new session
+				threadRoot = msgId ?? "room";
+			}
+		}
 		const conversationId = `nextcloud:${roomToken}:${threadRoot}`;
 		// Set reaction to show processing
 		if (msgId !== undefined) {

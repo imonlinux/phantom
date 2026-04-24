@@ -85,6 +85,27 @@ export class SessionStore {
 		this.db.run("UPDATE sessions SET status = 'expired' WHERE session_key = ?", [sessionKey]);
 	}
 
+	findMostRecentActiveForChannel(
+		channelId: string,
+		conversationPrefix: string,
+		windowMs: number,
+	): Session | null {
+		const cutoffDate = new Date(Date.now() - windowMs);
+		const cutoff = cutoffDate.toISOString();
+
+		const session = this.db.query(`
+			SELECT * FROM sessions
+			WHERE channel_id = ?
+			  AND conversation_id LIKE ? || '%'
+			  AND status = 'active'
+			  AND last_active_at > ?
+			ORDER BY last_active_at DESC
+			LIMIT 1
+		`).get(channelId, conversationPrefix, cutoff) as Session | null;
+
+		return session;
+	}
+
 	private isStale(session: Session): boolean {
 		const lastActive = new Date(session.last_active_at).getTime();
 		const now = Date.now();

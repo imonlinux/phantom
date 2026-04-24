@@ -379,7 +379,7 @@ async function main(): Promise<void> {
 			talkServer: channelsConfig.nextcloud.talk_server,
 			roomToken: channelsConfig.nextcloud.room_token,
 			webhookPath: channelsConfig.nextcloud.webhook_path,
-		});
+		}, runtime.sessionStore);
 		router.register(nextcloudChannel);
 		console.log("[phantom] Nextcloud channel registered");
 	}

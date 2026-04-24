@@ -36,9 +36,9 @@ import type { DirectorySnapshot } from "./versioning.ts";
 // byte-compares the post state, commits or rolls back.
 
 const TIER_TIMEOUTS_MS: Record<ReflectionTier, number> = {
-	haiku: 60_000,
-	sonnet: 180_000,
-	opus: 300_000,
+	haiku: 240_000,    // was 60_000 — bumped for glm-4.5-air via z.ai
+	sonnet: 360_000,   // was 180_000
+	opus: 600_000,     // was 300_000
 };
 
 const TIER_MODELS: Record<ReflectionTier, string> = {

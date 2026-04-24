@@ -49,6 +49,14 @@ Do NOT fire (evolve=false) when the session is one of these:
 - A system-originated message (secret save notification, button click forwarder) without meaningful user content.
 - Polite thanks, acknowledgements, or closing statements ("ok", "thanks", "perfect") with no new instruction.
 
+Channel context:
+- slack: Slack thread or DM. One session per thread.
+- nextcloud: Nextcloud Talk room thread. Treat like Slack — one session per thread, normal human conversation, fire on the same signals as Slack.
+- telegram: Telegram chat. Treat like Slack DM.
+- email: async email thread. Longer gaps between turns are normal; do not treat gap duration as a skip signal.
+- cli: direct CLI invocation by the operator. High-trust, high-signal.
+- scheduler: cron-triggered session with no human input. Only fire if the scheduled job surfaced an error or a learnable outcome.
+
 Edge rules:
 - If the session outcome is failure, fire. Failure sessions are the single highest-signal event shape and should always be reflected on.
 - If the user reaction array contains a negative reaction (thumbs down, angry, confused), fire.

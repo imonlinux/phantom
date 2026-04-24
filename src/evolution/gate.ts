@@ -194,7 +194,7 @@ function inferChannelType(sessionKey: string): string {
 function countToolErrors(session: SessionSummary): number {
 	let count = 0;
 	for (const msg of session.assistant_messages) {
-		if (msg.includes("Error:")) count += 1;
+		if (msg.startsWith("Error:")) count += 1;
 	}
 	return count;
 }

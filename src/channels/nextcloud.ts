@@ -41,6 +41,7 @@ interface NextcloudWebhookPayload {
 		id?: number | string;
 		content?: string;
 		name?: string;
+		parentMessageId?: number | string;
 	};
 	target?: {
 		id: string;
@@ -177,9 +178,14 @@ export class NextcloudChannel implements Channel {
 	}
 
 	async send(conversationId: string, message: OutboundMessage): Promise<SentMessage> {
-		const roomToken = this.parseConversationId(conversationId);
-		if (!roomToken) {
+		// Fix: Extract only room token from thread-scoped conversationId for outbound posts
+		const parsed = this.parseConversationId(conversationId);
+		if (!parsed) {
 			throw new Error(`Invalid conversation ID: ${conversationId}`);
+		}
+		const roomToken = parsed.split(":")[0];
+		if (!roomToken) {
+			throw new Error(`Invalid conversation ID (no room token): ${conversationId}`);
 		}
 
 		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId);
@@ -339,6 +345,21 @@ export class NextcloudChannel implements Channel {
 		const msgIdNum = typeof object?.id === "number" ? object.id : typeof object?.id === "string" ? parseInt(object.id, 10) : NaN;
 		const msgId = !isNaN(msgIdNum) ? msgIdNum : undefined;
 
+
+		// Fix: Scope session by thread. If the Talk payload includes a parentMessageId,
+		// the message is a reply in an existing thread; scope to the thread root.
+		// Otherwise treat the message itself as the thread root so each new
+		// top-level conversation becomes its own session.
+		const parentMessageIdNum = typeof object?.parentMessageId === "number"
+			? object.parentMessageId
+			: typeof object?.parentMessageId === "string"
+				? parseInt(object.parentMessageId, 10)
+				: NaN;
+		const parentMessageId = !isNaN(parentMessageIdNum) ? parentMessageIdNum : undefined;
+		const threadRoot = parentMessageId !== undefined
+			? parentMessageId
+			: (msgId ?? "room");
+		const conversationId = `nextcloud:${roomToken}:${threadRoot}`;
 		// Set reaction to show processing
 		if (msgId !== undefined) {
 			await this.setReaction(roomToken, msgId, "🧠", true);
@@ -348,7 +369,7 @@ export class NextcloudChannel implements Channel {
 		const inbound: InboundMessage = {
 			id: randomUUID(),
 			channelId: this.id,
-			conversationId: `nextcloud:${roomToken}`,
+			conversationId,
 			senderId: actorId,
 			senderName: actorName,
 			text: message,
@@ -592,7 +613,8 @@ export class NextcloudChannel implements Channel {
 
 	private parseConversationId(conversationId: string): string | null {
 		// Fix #5: Use indexOf + slice instead of split to handle colons in tokens
-		// Format: "nextcloud:{room_token}"
+		// Format: "nextcloud:{room_token}" or "nextcloud:{room_token}:{thread_root}"
+		// Returns "{room_token}" or "{room_token}:{thread_root}" for caller to split
 		const prefix = "nextcloud:";
 		if (!conversationId.startsWith(prefix)) {
 			return null;

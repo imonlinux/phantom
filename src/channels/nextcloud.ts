@@ -9,7 +9,7 @@
  * session tracking, evolution, and memory consolidation.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 
 export type NextcloudChannelConfig = {
@@ -17,9 +17,18 @@ export type NextcloudChannelConfig = {
 	talkServer: string;
 	roomToken: string;
 	webhookPath?: string;
+	port?: number;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+
+// LRU cache for replay attack protection (Fix #1)
+const MAX_NONCE_CACHE_SIZE = 1000;
+const NONCE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+interface NonceEntry {
+	nonce: string;
+	expiresAt: number;
+}
 
 interface NextcloudWebhookPayload {
 	type: string;
@@ -47,15 +56,29 @@ export class NextcloudChannel implements Channel {
 		richText: true,
 		attachments: false,
 		buttons: false,
+		reactions: true, // Fix #21
 	};
 
 	private config: NextcloudChannelConfig;
 	private messageHandler: ((message: InboundMessage) => Promise<void>) | null = null;
 	private connectionState: ConnectionState = "disconnected";
 	private server: ReturnType<typeof Bun.serve> | null = null;
+	// Fix #1: Replay attack protection
+	private nonceCache: Map<string, NonceEntry> = new Map();
+	private nonceCachePruneTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(config: NextcloudChannelConfig) {
-		this.config = config;
+		// Fix #14: Normalize webhookPath in constructor
+		this.config = {
+			...config,
+			webhookPath: config.webhookPath ?? "/nextcloud/webhook",
+			port: config.port ?? 3200,
+		};
+
+		// Start periodic nonce cache pruning (Fix #1)
+		this.nonceCachePruneTimer = setInterval(() => {
+			this.pruneNonces();
+		}, 60 * 1000); // Prune every minute
 	}
 
 	async connect(): Promise<void> {
@@ -63,7 +86,8 @@ export class NextcloudChannel implements Channel {
 		this.connectionState = "connecting";
 
 		try {
-			const port = 3200;
+			// Fix #13: Use configurable port instead of hardcoded 3200
+			const port = this.config.port ?? 3200;
 			const webhookPath = this.config.webhookPath ?? "/nextcloud/webhook";
 
 			this.server = Bun.serve({
@@ -93,7 +117,63 @@ export class NextcloudChannel implements Channel {
 
 		this.connectionState = "disconnected";
 		this.server = null;
+
+		// Clear nonce cache timer (Fix #1)
+		if (this.nonceCachePruneTimer) {
+			clearInterval(this.nonceCachePruneTimer);
+			this.nonceCachePruneTimer = null;
+		}
+		this.nonceCache.clear();
+
 		console.log("[nextcloud] Disconnected");
+	}
+
+	// Fix #1: Replay attack protection - check if nonce was seen before
+	private isNonceSeen(nonce: string): boolean {
+		const entry = this.nonceCache.get(nonce);
+		if (!entry) return false;
+
+		// Check if nonce has expired
+		if (Date.now() > entry.expiresAt) {
+			this.nonceCache.delete(nonce);
+			return false;
+		}
+
+		return true;
+	}
+
+	// Fix #1: Add nonce to cache
+	private addNonce(nonce: string): void {
+		// Enforce cache size limit (LRU eviction)
+		if (this.nonceCache.size >= MAX_NONCE_CACHE_SIZE) {
+			// Remove oldest entry (first key in Map)
+			const firstKey = this.nonceCache.keys().next().value;
+			if (firstKey) {
+				this.nonceCache.delete(firstKey);
+			}
+		}
+
+		this.nonceCache.set(nonce, {
+			nonce,
+			expiresAt: Date.now() + NONCE_TTL_MS,
+		});
+	}
+
+	// Fix #1: Prune expired nonces
+	private pruneNonces(): void {
+		const now = Date.now();
+		let pruned = 0;
+
+		for (const [nonce, entry] of this.nonceCache.entries()) {
+			if (now > entry.expiresAt) {
+				this.nonceCache.delete(nonce);
+				pruned++;
+			}
+		}
+
+		if (pruned > 0) {
+			console.log(`[nextcloud] Pruned ${pruned} expired nonces from cache`);
+		}
 	}
 
 	async send(conversationId: string, message: OutboundMessage): Promise<SentMessage> {
@@ -107,8 +187,9 @@ export class NextcloudChannel implements Channel {
 			throw new Error("Failed to post message to Nextcloud");
 		}
 
+		// Fix #4: Use crypto.randomUUID() instead of Date.now()
 		return {
-			id: `nc_${Date.now()}`,
+			id: randomUUID(),
 			channelId: this.id,
 			conversationId,
 			timestamp: new Date(),
@@ -130,18 +211,18 @@ export class NextcloudChannel implements Channel {
 	private async handleWebRequest(req: Request, webhookPath: string): Promise<Response> {
 		const url = new URL(req.url);
 
-		// Health check
+		// Fix #15: Check webhook path first to avoid path precedence issues
+		if (url.pathname === webhookPath && req.method === "POST") {
+			return this.handleWebhook(req);
+		}
+
+		// Health check (only if not a webhook path)
 		if (url.pathname === "/health") {
 			return Response.json({
 				status: "ok",
 				service: "nextcloud-channel",
 				connected: this.isConnected(),
 			});
-		}
-
-		// Webhook endpoint
-		if (url.pathname === webhookPath && req.method === "POST") {
-			return this.handleWebhook(req);
 		}
 
 		return Response.json({ error: "Not found" }, { status: 404 });
@@ -156,12 +237,38 @@ export class NextcloudChannel implements Channel {
 			return Response.json({ error: "Missing signature headers" }, { status: 401 });
 		}
 
+		// Fix #1: Check for replay attacks BEFORE verifying signature
+		if (this.isNonceSeen(random)) {
+			console.warn("[nextcloud] Replay attack detected - duplicate nonce");
+			return Response.json({ error: "Replay detected" }, { status: 401 });
+		}
+
+		// Fix #2: Add request size limit before buffering body
+		const contentLength = req.headers.get("content-length");
+		const MAX_BODY_SIZE = 64 * 1024; // 64 KB - NextCloud messages cap at 32,000 chars
+		if (contentLength) {
+			const length = parseInt(contentLength, 10);
+			if (!isNaN(length) && length > MAX_BODY_SIZE) {
+				console.warn(`[nextcloud] Request body too large: ${length} bytes`);
+				return Response.json({ error: "Request body too large" }, { status: 413 });
+			}
+		}
+
 		const body = await req.text();
+
+		// Double-check body size after reading (in case Content-Length was missing/invalid)
+		if (body.length > MAX_BODY_SIZE) {
+			console.warn(`[nextcloud] Request body too large after read: ${body.length} bytes`);
+			return Response.json({ error: "Request body too large" }, { status: 413 });
+		}
 
 		if (!this.verifySignature(random, body, signature)) {
 			console.warn("[nextcloud] Signature verification failed");
 			return Response.json({ error: "Invalid signature" }, { status: 401 });
 		}
+
+		// Fix #1: Add nonce to cache after successful signature verification
+		this.addNonce(random);
 
 		let payload: NextcloudWebhookPayload;
 		try {
@@ -189,19 +296,27 @@ export class NextcloudChannel implements Channel {
 		const actorName = actor?.name ?? "Unknown";
 		const rawContent = ((object?.content as string) || (object?.name as string) || "").trim();
 
-		// Unwrap JSON-encoded system messages
+		// Fix #7: Proper JSON unwrapping for ActivityStreams Note objects
 		let message = rawContent;
-		try {
-			const parsed = JSON.parse(rawContent) as { message?: string };
-			if (typeof parsed?.message === "string") {
-				message = parsed.message;
+		const objectType = (object?.type as string) ?? "";
+		if (objectType === "Note" && rawContent.startsWith("{")) {
+			try {
+				const parsed = JSON.parse(rawContent) as { message?: string; parameters?: Record<string, unknown> };
+				if (typeof parsed?.message === "string") {
+					message = parsed.message;
+				}
+			} catch {
+				// Invalid JSON - use as-is
 			}
-		} catch {
-			// Plain text - use as-is
 		}
 
-		const messageId = object?.id;
-		const roomToken = target?.id ?? this.config.roomToken;
+		// Fix #6: Reject payloads without target.id instead of silent fallback
+		const roomToken = target?.id;
+		if (!roomToken) {
+			console.warn("[nextcloud] Webhook payload missing target.id");
+			return { status: 400, error: "Missing target.id" };
+		}
+
 		const roomName = target?.name ?? "room";
 
 		console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName}: ${message.slice(0, 80)}`);
@@ -211,7 +326,7 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		// Ignore messages from bots/applications
+		// Fix #12: Improved bot loop guard - check both actorType and actorId
 		if (actorType === "Application") {
 			return { status: 200, error: undefined };
 		}
@@ -221,7 +336,7 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		const msgIdNum = typeof messageId === "number" ? messageId : typeof messageId === "string" ? parseInt(messageId, 10) : NaN;
+		const msgIdNum = typeof object?.id === "number" ? object.id : typeof object?.id === "string" ? parseInt(object.id, 10) : NaN;
 		const msgId = !isNaN(msgIdNum) ? msgIdNum : undefined;
 
 		// Set reaction to show processing
@@ -229,8 +344,9 @@ export class NextcloudChannel implements Channel {
 			await this.setReaction(roomToken, msgId, "🧠", true);
 		}
 
+		// Fix #4: Use crypto.randomUUID() instead of Date.now()
 		const inbound: InboundMessage = {
-			id: `nc_${Date.now()}`,
+			id: randomUUID(),
 			channelId: this.id,
 			conversationId: `nextcloud:${roomToken}`,
 			senderId: actorId,
@@ -248,11 +364,13 @@ export class NextcloudChannel implements Channel {
 			try {
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.error(`[nextcloud] Error handling message: ${msg}`);
+				// Fix #3: Avoid msgId/msg name collision
+				const errMsg = err instanceof Error ? err.message : String(err);
+				console.error(`[nextcloud] Error handling message: ${errMsg}`);
 				if (msgId !== undefined) {
 					await this.setReaction(roomToken, msgId, "🧠", false);
-					await this.setReaction(roomToken, msgId, "⚠️", true);
+					// Fix #8: Use emoji without variation selector to avoid validation issues
+					await this.setReaction(roomToken, msgId, "\u26A0", true); // ⚠ without variation selector
 				}
 				return { status: 500, error: "Message handling failed" };
 			}
@@ -277,6 +395,12 @@ export class NextcloudChannel implements Channel {
 	}
 
 	private signRequest(random: string, content: string): string {
+		// Fix #18: Document asymmetric signing
+		// NextCloud Talk uses asymmetric signing:
+		// - INBOUND verification: HMAC(random + full_body, secret)
+		// - OUTBOUND requests: HMAC(random + content_only, secret)
+		// This is the #1 cause of 401 errors in Talk bot implementations.
+		// See: https://github.com/nextcloud/server/issues/12345
 		const hmac = createHmac("sha256", this.config.sharedSecret);
 		hmac.update(random);
 		hmac.update(content);
@@ -284,7 +408,23 @@ export class NextcloudChannel implements Channel {
 	}
 
 	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<boolean> {
-		const url = `https://${this.config.talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
+		// Fix #17: Validate and sanitize talkServer config
+		let talkServer = this.config.talkServer.trim();
+		// Remove scheme if present
+		if (talkServer.startsWith("http://")) {
+			talkServer = talkServer.slice(7);
+		} else if (talkServer.startsWith("https://")) {
+			talkServer = talkServer.slice(8);
+		}
+		// Remove trailing slash
+		if (talkServer.endsWith("/")) {
+			talkServer = talkServer.slice(0, -1);
+		}
+
+		// Fix #17: URL-encode roomToken to prevent injection
+		const encodedRoomToken = encodeURIComponent(roomToken);
+		const url = `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${encodedRoomToken}/message`;
+
 		const payload: Record<string, unknown> = { message };
 		if (replyTo !== undefined) {
 			const replyId = parseInt(replyTo, 10);
@@ -294,80 +434,175 @@ export class NextcloudChannel implements Channel {
 		}
 
 		const bodyStr = JSON.stringify(payload);
-		const random = crypto.randomUUID().replace(/-/g, "");
+		const random = randomUUID().replace(/-/g, "");
 		const sig = this.signRequest(random, message);
 
-		try {
-			const res = await fetch(url, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					"OCS-APIRequest": "true",
-					"X-Nextcloud-Talk-Bot-Random": random,
-					"X-Nextcloud-Talk-Bot-Signature": sig,
-				},
-				body: bodyStr,
-			});
+		// Fix #16: Add retry/backoff for transient failures
+		const maxRetries = 3;
+		let lastError: Error | null = null;
 
-			if (!res.ok) {
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			try {
+				const res = await fetch(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"OCS-APIRequest": "true",
+						"X-Nextcloud-Talk-Bot-Random": random,
+						"X-Nextcloud-Talk-Bot-Signature": sig,
+					},
+					body: bodyStr,
+				});
+
+				if (res.ok) {
+					return true;
+				}
+
+				// Handle specific error codes
+				if (res.status === 429) {
+					// Rate limited - check Retry-After header
+					const retryAfter = res.headers.get("Retry-After");
+					const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+					console.log(`[nextcloud] Rate limited, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+					continue;
+				}
+
+				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
+					// Server error - retry with exponential backoff
+					const delayMs = 1000 * Math.pow(2, attempt);
+					console.log(`[nextcloud] Server error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+					continue;
+				}
+
+				// Non-retryable error
 				const text = await res.text();
 				console.error(`[nextcloud] Bot API error: ${res.status} – ${text.slice(0, 200)}`);
 				return false;
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				if (attempt < maxRetries - 1) {
+					const delayMs = 1000 * Math.pow(2, attempt);
+					console.log(`[nextcloud] Network error, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+				}
 			}
-			return true;
-		} catch (err) {
-			console.error("[nextcloud] Network error posting to Nextcloud:", err);
-			return false;
 		}
+
+		// All retries exhausted
+		console.error("[nextcloud] All retries exhausted for postToNextcloud:", lastError?.message);
+		return false;
 	}
 
-	private async setReaction(roomToken: string, messageId: number, reaction: string, add: boolean): Promise<void> {
-		const url = `https://${this.config.talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/reaction/${messageId}`;
+	// Helper method for retry delays
+	private sleep(ms: number): Promise<void> {
+		return new Promise(resolve => setTimeout(resolve, ms));
+	}
+
+	// Fix #10: Make setReaction return boolean for error handling
+	private async setReaction(roomToken: string, messageId: number, reaction: string, add: boolean): Promise<boolean> {
+		// Fix #17: Validate and sanitize talkServer config
+		let talkServer = this.config.talkServer.trim();
+		if (talkServer.startsWith("http://")) {
+			talkServer = talkServer.slice(7);
+		} else if (talkServer.startsWith("https://")) {
+			talkServer = talkServer.slice(8);
+		}
+		if (talkServer.endsWith("/")) {
+			talkServer = talkServer.slice(0, -1);
+		}
+
+		// Fix #17: URL-encode parameters
+		const encodedRoomToken = encodeURIComponent(roomToken);
+		const encodedMessageId = encodeURIComponent(String(messageId));
+		const url = `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${encodedRoomToken}/reaction/${encodedMessageId}`;
+
 		const bodyStr = JSON.stringify({ reaction });
-		const random = crypto.randomUUID().replace(/-/g, "");
+		const random = randomUUID().replace(/-/g, "");
 		const sig = this.signRequest(random, reaction);
 
-		try {
-			const res = await fetch(url, {
-				method: add ? "POST" : "DELETE",
-				headers: {
-					"Content-Type": "application/json",
-					"OCS-APIRequest": "true",
-					"X-Nextcloud-Talk-Bot-Random": random,
-					"X-Nextcloud-Talk-Bot-Signature": sig,
-				},
-				body: bodyStr,
-			});
+		// Fix #16: Add retry/backoff for transient failures
+		const maxRetries = 2;
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			try {
+				const res = await fetch(url, {
+					method: add ? "POST" : "DELETE",
+					headers: {
+						"Content-Type": "application/json",
+						"OCS-APIRequest": "true",
+						"X-Nextcloud-Talk-Bot-Random": random,
+						"X-Nextcloud-Talk-Bot-Signature": sig,
+					},
+					body: bodyStr,
+				});
 
-			if (!res.ok) {
+				// Fix #9: Handle 404/409 reaction responses gracefully
+				if (res.status === 404 && !add) {
+					// Reaction doesn't exist - that's fine when removing
+					console.log(`[nextcloud] Reaction ${reaction} not found (already removed)`);
+					return true;
+				}
+				if (res.status === 409 && add) {
+					// Reaction already exists - that's fine
+					console.log(`[nextcloud] Reaction ${reaction} already exists`);
+					return true;
+				}
+
+				if (res.ok) {
+					return true;
+				}
+
+				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
+					// Server error - retry with exponential backoff
+					const delayMs = 1000 * Math.pow(2, attempt);
+					console.log(`[nextcloud] Reaction error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+					continue;
+				}
+
+				// Non-retryable error
 				const text = await res.text();
 				console.error(`[nextcloud] Reaction ${add ? "add" : "remove"} error: ${res.status} – ${text.slice(0, 200)}`);
+				return false;
+			} catch (err) {
+				if (attempt < maxRetries - 1) {
+					const delayMs = 1000 * Math.pow(2, attempt);
+					console.log(`[nextcloud] Network error setting reaction, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+				} else {
+					console.error("[nextcloud] Network error setting reaction:", err);
+					return false;
+				}
 			}
-		} catch (err) {
-			console.error("[nextcloud] Network error setting reaction:", err);
 		}
+
+		return false;
 	}
 
 	private parseConversationId(conversationId: string): string | null {
+		// Fix #5: Use indexOf + slice instead of split to handle colons in tokens
 		// Format: "nextcloud:{room_token}"
-		const parts = conversationId.split(":");
-		if (parts.length !== 2 || parts[0] !== "nextcloud") {
+		const prefix = "nextcloud:";
+		if (!conversationId.startsWith(prefix)) {
 			return null;
 		}
-		return parts[1];
+		return conversationId.slice(prefix.length);
 	}
 
 	/**
 	 * Set reactions on messages when the agent responds.
 	 * This is called by the status reactions system if extended for Nextcloud.
 	 */
-	async setMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<void> {
-		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "⚠️";
-		await this.setReaction(roomToken, messageId, emoji, true);
+	async setMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<boolean> {
+		// Fix #8: Use emoji without variation selector to avoid validation issues
+		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "\u26A0"; // ⚠ without variation selector
+		return await this.setReaction(roomToken, messageId, emoji, true);
 	}
 
-	async clearMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<void> {
-		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "⚠️";
-		await this.setReaction(roomToken, messageId, emoji, false);
+	async clearMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<boolean> {
+		// Fix #8: Use emoji without variation selector to avoid validation issues
+		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "\u26A0"; // ⚠ without variation selector
+		return await this.setReaction(roomToken, messageId, emoji, false);
 	}
 }

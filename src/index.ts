@@ -563,6 +563,8 @@ async function main(): Promise<void> {
 			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
 		}
 
+		// Fix #11: Track error events instead of text sniffing
+		let hadErrorEvent = false;
 		const response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
 			switch (event.type) {
 				case "init":
@@ -579,6 +581,7 @@ async function main(): Promise<void> {
 					}
 					break;
 				case "error":
+					hadErrorEvent = true;
 					statusReactions?.setError();
 					break;
 			}
@@ -589,8 +592,8 @@ async function main(): Promise<void> {
 			existing.assistant.push(response.text);
 		}
 
-		// Finalize: set done reaction
-		if (response.text.startsWith("Error:")) {
+		// Fix #11: Use error event flag instead of text sniffing
+		if (hadErrorEvent) {
 			await statusReactions?.setError();
 		} else {
 			await statusReactions?.setDone();
@@ -601,10 +604,10 @@ async function main(): Promise<void> {
 			telegramChannel.stopTyping(telegramChatId);
 		}
 
-		// Nextcloud: finalize reactions
+		// Fix #11: Use error event flag instead of text sniffing for Nextcloud reactions
 		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
 			await nextcloudChannel.clearMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
-			const finalReaction = response.text.startsWith("Error:") ? "error" : "done";
+			const finalReaction = hadErrorEvent ? "error" : "done";
 			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, finalReaction);
 		}
 
@@ -652,7 +655,7 @@ async function main(): Promise<void> {
 				startedAt: sessionStartedAt,
 				endedAt: new Date().toISOString(),
 				costUsd: response.cost.totalUsd,
-				outcome: response.text.startsWith("Error:") ? "failure" : "success",
+				outcome: hadErrorEvent ? "failure" : "success", // Fix #11: Use error event flag
 			};
 
 			// Phase 3 simplified memory consolidation: the Phase 1+2 LLM judge
@@ -686,7 +689,7 @@ async function main(): Promise<void> {
 				assistant_messages: existing.assistant,
 				tools_used: [],
 				files_tracked: trackedFiles,
-				outcome: response.text.startsWith("Error:") ? "failure" : "success",
+				outcome: hadErrorEvent ? "failure" : "success", // Fix #11: Use error event flag
 				cost_usd: response.cost.totalUsd,
 				started_at: sessionStartedAt,
 				ended_at: new Date().toISOString(),

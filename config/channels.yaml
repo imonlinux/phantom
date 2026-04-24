@@ -9,6 +9,6 @@ slack:
 # nextcloud:
 #  enabled: true
 #  shared_secret: ${NEXTCLOUD_SHARED_SECRET}
-#  talk_server: ${TALK_SERVER}
-#  room_token: ${ROOM_TOKEN}
+#  talk_server: ${NEXTCLOUD_TALK_SERVER}
+#  room_token: ${NEXTCLOUD_ROOM_TOKEN}
 #  webhook_path: /nextcloud/webhook

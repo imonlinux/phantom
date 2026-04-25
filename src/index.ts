@@ -11,6 +11,7 @@ import { NextcloudChannel } from "./channels/nextcloud.ts";
 import { formatToolActivity } from "./channels/progress-stream.ts";
 import { createProgressStream } from "./channels/progress-stream.ts";
 import { ChannelRouter } from "./channels/router.ts";
+import type { InboundMessage } from "./channels/types.ts";
 import { setActionFollowUpHandler } from "./channels/slack-actions.ts";
 import { SlackChannel } from "./channels/slack.ts";
 import { createStatusReactionController } from "./channels/status-reactions.ts";
@@ -494,7 +495,9 @@ async function main(): Promise<void> {
 
 	const conversationMessages = new Map<string, { user: string[]; assistant: string[] }>();
 
-	router.onMessage(async (msg) => {
+	// Message handler that processes all inbound messages from channels
+	// Also exported for /trigger endpoint to use directly
+	const messageHandler = async (msg: InboundMessage) => {
 		const sessionStartedAt = new Date().toISOString();
 		const convKey = `${msg.channelId}:${msg.conversationId}`;
 
@@ -732,6 +735,9 @@ async function main(): Promise<void> {
 		statusReactions?.dispose();
 	});
 
+	// Register the message handler with the router
+	router.onMessage(messageHandler);
+
 	const server = startServer(config, startedAt);
 
 	installShutdownHandlers();
@@ -801,6 +807,8 @@ async function main(): Promise<void> {
 	// Wire /trigger endpoint
 	setTriggerDeps({
 		runtime,
+		router,
+		messageHandler,
 		slackChannel: slackChannel ?? undefined,
 		ownerUserId: channelsConfig?.slack?.owner_user_id,
 	});

@@ -730,7 +730,7 @@ async function main(): Promise<void> {
 
 		// Clean up
 		statusReactions?.dispose();
-	};
+	});
 
 	const server = startServer(config, startedAt);
 

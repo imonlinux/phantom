@@ -733,7 +733,7 @@ async function main(): Promise<void> {
 
 		// Clean up
 		statusReactions?.dispose();
-	});
+	};
 
 	// Register the message handler with the router
 	router.onMessage(messageHandler);

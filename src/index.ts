@@ -22,6 +22,7 @@ import {
 	setChannelHealthProvider,
 	setChatHandler,
 	setEvolutionVersionProvider,
+	setEvolutionMetricsProvider,
 	setMcpServerProvider,
 	setMemoryHealthProvider,
 	setOnboardingStatusProvider,
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
 		const judgeMode = engine.usesLLMJudges() ? "LLM judges" : "heuristic";
 		console.log(`[evolution] Engine initialized (v${currentVersion}, ${judgeMode})`);
 		setEvolutionVersionProvider(() => evolution?.getCurrentVersion() ?? 0);
+		setEvolutionMetricsProvider(() => evolution?.getMetrics() ?? null);
 
 		// Phase 2: persistent queue + cadence scheduler. The cadence starts
 		// here so cron ticks begin immediately after boot. Demand triggers

@@ -43,6 +43,36 @@ function registerHealthResource(server: McpServer, deps: ResourceDependencies): 
 			const uptimeSeconds = Math.floor((Date.now() - deps.startedAt) / 1000);
 			const allHealthy = memoryHealth.qdrant && memoryHealth.ollama;
 
+			// Fix C: Calculate timeout rate alarm
+			const evolutionMetrics = deps.evolution?.getMetrics();
+			const stats = evolutionMetrics?.reflection_stats;
+			const totalDrains = stats?.drains ?? 0;
+			let timeoutRateInfo: { timeout_rate_pct?: string; timeout_status?: string; timeout_message?: string } | null = null;
+
+			if (totalDrains >= 5) {
+				const totalTimeouts = (stats?.timeout_haiku ?? 0) + (stats?.timeout_sonnet ?? 0) + (stats?.timeout_opus ?? 0);
+				const timeoutRate = totalTimeouts / totalDrains;
+
+				if (timeoutRate > 0.5) {
+					timeoutRateInfo = {
+						timeout_rate_pct: (timeoutRate * 100).toFixed(0),
+						timeout_status: "degraded",
+						timeout_message: "Reflection timeout rate > 50%. Check provider latency or increase evolution.reflection.timeouts_ms.",
+					};
+				} else if (timeoutRate > 0.2) {
+					timeoutRateInfo = {
+						timeout_rate_pct: (timeoutRate * 100).toFixed(0),
+						timeout_status: "warning",
+						timeout_message: "Reflection timeout rate elevated. Monitor closely.",
+					};
+				} else {
+					timeoutRateInfo = {
+						timeout_rate_pct: (timeoutRate * 100).toFixed(0),
+						timeout_status: "ok",
+					};
+				}
+			}
+
 			return {
 				contents: [
 					{
@@ -56,6 +86,7 @@ function registerHealthResource(server: McpServer, deps: ResourceDependencies): 
 								memory: memoryHealth,
 								evolution: {
 									generation: deps.evolution?.getCurrentVersion() ?? 0,
+									...timeoutRateInfo,
 								},
 							},
 							null,

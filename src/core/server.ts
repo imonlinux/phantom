@@ -8,6 +8,7 @@ import { loadMcpConfig } from "../mcp/config.ts";
 import type { PhantomMcpServer } from "../mcp/server.ts";
 import type { MemoryHealth } from "../memory/types.ts";
 import type { SchedulerHealthSummary } from "../scheduler/health.ts";
+import type { EvolutionMetrics } from "../evolution/types.ts";
 import { avatarUrlIfPresent, handleAvatarGet } from "../ui/api/identity.ts";
 import { getPublicDir, handleUiRequest } from "../ui/serve.ts";
 import { type HealthPayload, renderHealthHtml } from "./health-page.ts";
@@ -18,6 +19,7 @@ type ChatHandler = (req: Request) => Promise<Response | null>;
 
 type MemoryHealthProvider = () => Promise<MemoryHealth>;
 type EvolutionVersionProvider = () => number;
+type EvolutionMetricsProvider = () => EvolutionMetrics | null;
 type McpServerProvider = () => PhantomMcpServer | null;
 type ChannelHealthProvider = () => Record<string, boolean>;
 type RoleInfoProvider = () => { id: string; name: string } | null;
@@ -33,6 +35,7 @@ type TriggerDeps = {
 
 let memoryHealthProvider: MemoryHealthProvider | null = null;
 let evolutionVersionProvider: EvolutionVersionProvider | null = null;
+let evolutionMetricsProvider: EvolutionMetricsProvider | null = null;
 let mcpServerProvider: McpServerProvider | null = null;
 let channelHealthProvider: ChannelHealthProvider | null = null;
 let roleInfoProvider: RoleInfoProvider | null = null;
@@ -49,6 +52,10 @@ export function setMemoryHealthProvider(provider: MemoryHealthProvider): void {
 
 export function setEvolutionVersionProvider(provider: EvolutionVersionProvider): void {
 	evolutionVersionProvider = provider;
+}
+
+export function setEvolutionMetricsProvider(provider: EvolutionMetricsProvider): void {
+	evolutionMetricsProvider = provider;
 }
 
 export function setMcpServerProvider(provider: McpServerProvider): void {
@@ -89,6 +96,37 @@ export function setChatHandler(handler: ChatHandler): void {
 
 let triggerAuth: AuthMiddleware | null = null;
 
+// Fix C: Calculate timeout rate health alarm
+function getTimeoutRateHealth(metrics: EvolutionMetrics | null): { status: string; message?: string } | null {
+	if (!metrics) return null;
+
+	const stats = metrics.reflection_stats;
+	const totalDrains = stats.drains ?? 0;
+
+	if (totalDrains < 5) {
+		return { status: "ok" }; // Not enough data
+	}
+
+	const totalTimeouts = (stats.timeout_haiku ?? 0) + (stats.timeout_sonnet ?? 0) + (stats.timeout_opus ?? 0);
+	const timeoutRate = totalTimeouts / totalDrains;
+
+	if (timeoutRate > 0.5) {
+		return {
+			status: "degraded",
+			message: `Reflection timeout rate ${(timeoutRate * 100).toFixed(0)}%. Check provider latency or increase evolution.reflection.timeouts_ms.`,
+		};
+	}
+
+	if (timeoutRate > 0.2) {
+		return {
+			status: "warning",
+			message: `Reflection timeout rate ${(timeoutRate * 100).toFixed(0)}%. Monitor closely.`,
+		};
+	}
+
+	return { status: "ok" };
+}
+
 // Content negotiation: return HTML only when the client accepts text/html.
 // curl defaults to Accept: */* (no match), Docker healthcheck uses curl, MCP
 // clients send application/json. Browsers lead with text/html.
@@ -119,6 +157,16 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 				const status = allHealthy ? "ok" : someHealthy ? "degraded" : memory.configured ? "down" : "ok";
 				const evolutionGeneration = evolutionVersionProvider ? evolutionVersionProvider() : 0;
 
+				// Fix C: Calculate timeout rate alarm
+				const evolutionMetrics = evolutionMetricsProvider ? evolutionMetricsProvider() : null;
+				const timeoutRateHealth = getTimeoutRateHealth(evolutionMetrics);
+
+				// Downgrade overall status if timeout rate is degraded
+				let finalStatus = status;
+				if (timeoutRateHealth?.status === "degraded" && status === "ok") {
+					finalStatus = "degraded";
+				}
+
 				const roleInfo = roleInfoProvider ? roleInfoProvider() : null;
 
 				const onboardingStatus = onboardingStatusProvider ? onboardingStatusProvider() : null;
@@ -126,7 +174,7 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 				const scheduler = schedulerHealthProvider ? schedulerHealthProvider() : null;
 
 				const payload: HealthPayload = {
-					status,
+					status: finalStatus,
 					uptime: Math.floor((Date.now() - startedAt) / 1000),
 					version: VERSION,
 					agent: config.name,
@@ -135,7 +183,18 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 					role: roleInfo ?? { id: config.role, name: config.role },
 					channels,
 					memory,
-					evolution: { generation: evolutionGeneration },
+					evolution: {
+						generation: evolutionGeneration,
+						...(timeoutRateHealth ? {
+							timeout_rate_pct: evolutionMetrics ? (((
+								(evolutionMetrics.reflection_stats.timeout_haiku ?? 0) +
+								(evolutionMetrics.reflection_stats.timeout_sonnet ?? 0) +
+								(evolutionMetrics.reflection_stats.timeout_opus ?? 0)
+							) / (evolutionMetrics.reflection_stats.drains ?? 1)) * 100).toFixed(0) : "0",
+							timeout_status: timeoutRateHealth.status,
+							...(timeoutRateHealth.message ? { timeout_message: timeoutRateHealth.message } : {}),
+						} : {}),
+					},
 					...(onboardingStatus ? { onboarding: onboardingStatus } : {}),
 					...(peers && Object.keys(peers).length > 0 ? { peers } : {}),
 					...(scheduler ? { scheduler } : {}),

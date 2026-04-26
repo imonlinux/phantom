@@ -11,7 +11,12 @@ export type HealthPayload = {
 	role: { id: string; name: string };
 	channels: Record<string, boolean>;
 	memory: MemoryHealth;
-	evolution: { generation: number };
+	evolution: {
+		generation: number;
+		timeout_rate_pct?: string;
+		timeout_status?: string;
+		timeout_message?: string;
+	};
 	onboarding?: string;
 	peers?: Record<string, { healthy: boolean; latencyMs: number; error?: string }>;
 	scheduler?: SchedulerHealthSummary;
@@ -146,6 +151,9 @@ export function renderHealthHtml(payload: HealthPayload): string {
 		variant === "success" ? '<span class="phantom-dot phantom-dot-live"></span>' : '<span class="phantom-dot"></span>';
 	const publicUrl = payload.public_url ? escapeHtml(payload.public_url) : "";
 	const evolution = payload.evolution?.generation ?? 0;
+	const timeoutRatePct = payload.evolution?.timeout_rate_pct;
+	const timeoutStatus = payload.evolution?.timeout_status;
+	const timeoutMessage = payload.evolution?.timeout_message;
 	const role = escapeHtml(payload.role?.name ?? payload.role?.id ?? "");
 
 	const qdrantDot = memoryDot(payload.memory.qdrant, payload.memory.configured);
@@ -296,7 +304,12 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
         <p class="phantom-stat-value" id="stat-evolution">
           <span class="phantom-badge phantom-badge-primary">Gen ${evolution}</span>
         </p>
-        <p class="phantom-stat-trend-flat">current</p>
+        ${timeoutRatePct && timeoutStatus ? `
+          <p class="phantom-stat-trend-${timeoutStatus === "degraded" ? "down" : timeoutStatus === "warning" ? "flat" : "flat"}" style="font-size:11px;">
+            ${timeoutStatus === "degraded" ? "⚠️" : timeoutStatus === "warning" ? "⚡" : "✓"} ${timeoutRatePct}% timeout rate
+            ${timeoutMessage ? `<br><span style="font-weight:400;opacity:0.8;">${escapeHtml(timeoutMessage)}</span>` : ""}
+          </p>
+        ` : '<p class="phantom-stat-trend-flat">current</p>'}
       </div>
     </div>
   </section>

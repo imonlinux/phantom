@@ -382,7 +382,7 @@ export const MIGRATIONS: string[] = [
 	// "legacy" label in the audit drawer.
 	"ALTER TABLE settings_audit_log ADD COLUMN section TEXT",
 
-	/ Index 47 (NEW — Fix D):
+	// Index 47 (NEW — Fix D):
     // Fix D: auto-poison rows after consecutive timeout failures. Timeouts
     // are tracked separately from retry_count because they indicate a
     // provider capacity issue rather than a content quality problem. Rows

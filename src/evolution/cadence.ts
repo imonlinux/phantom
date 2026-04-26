@@ -164,7 +164,7 @@ export class EvolutionCadence {
 		console.log(
 			`[evolution] draining batch of ${queued.length} sessions (trigger=${trigger}, cadence=${this.cadenceConfig.cadenceMinutes}min)`,
 		);
-		const result = await processBatch(queued, this.engine);
+		const result = await processBatch(queued, this.engine, this.queue);
 
 		// Phase 3 queue disposition (switch on the explicit enum carried by
 		// every batch entry):

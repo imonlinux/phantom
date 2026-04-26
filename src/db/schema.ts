@@ -234,6 +234,13 @@ export const MIGRATIONS: string[] = [
 	// issues. This is the deliberate asymmetry from the Phase 3 brief.
 	"ALTER TABLE evolution_queue ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
 
+	// Fix D: auto-poison rows after consecutive timeout failures. Timeouts
+	// are tracked separately from retry_count because they indicate a
+	// provider capacity issue rather than a content quality problem. Rows
+	// that timeout 5 times in a row are moved to evolution_queue_poison
+	// regardless of their retry_count.
+	"ALTER TABLE evolution_queue ADD COLUMN consecutive_timeouts INTEGER NOT NULL DEFAULT 0",
+
 	`CREATE TABLE IF NOT EXISTS evolution_queue_poison (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		session_id TEXT NOT NULL,

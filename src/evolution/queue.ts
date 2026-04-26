@@ -13,6 +13,7 @@ import type { SessionSummary } from "./types.ts";
 // `listPoisonPile` ships so a future CLI PR can read it directly.
 
 const POISON_RETRY_THRESHOLD = 3;
+const POISON_TIMEOUT_THRESHOLD = 5;
 
 const GateSourceSchema = z.enum(["haiku", "failsafe"]);
 
@@ -45,6 +46,7 @@ export type QueuedSession = {
 	session_summary: SessionSummary;
 	enqueued_at: string;
 	retry_count: number;
+	consecutive_timeouts: number;
 };
 
 export type PoisonedRow = {
@@ -66,6 +68,7 @@ type QueueRow = {
 	session_summary_json: string;
 	enqueued_at: string;
 	retry_count: number;
+	consecutive_timeouts: number;
 };
 
 type PoisonRow = {
@@ -104,7 +107,7 @@ export class EvolutionQueue {
 	drainAll(): QueuedSession[] {
 		const rows = this.db
 			.query(
-				"SELECT id, session_id, session_key, gate_decision_json, session_summary_json, enqueued_at, retry_count FROM evolution_queue ORDER BY enqueued_at ASC, id ASC",
+				"SELECT id, session_id, session_key, gate_decision_json, session_summary_json, enqueued_at, retry_count, consecutive_timeouts FROM evolution_queue ORDER BY enqueued_at ASC, id ASC",
 			)
 			.all() as QueueRow[];
 		return rows.map((row) => parseRow(row));
@@ -194,6 +197,57 @@ export class EvolutionQueue {
 	}
 
 	/**
+	 * Increment consecutive_timeouts for rows that timed out during the
+	 * reflection subprocess. Resets the counter to 0 for rows that did NOT
+	 * timeout (successful completion). Rows that hit POISON_TIMEOUT_THRESHOLD
+	 * are moved to evolution_queue_poison with a failure reason indicating
+	 * the timeout ceiling was hit.
+	 *
+	 * This is separate from retry_count because timeouts indicate provider
+	 * capacity issues rather than content quality problems. A row can have
+	 * retry_count=0 but consecutive_timeouts=5 and still be poisoned.
+	 */
+	incrementConsecutiveTimeouts(ids: number[], timedOutIds: number[]): { poisoned: number[] } {
+		if (ids.length === 0) return { poisoned: [] };
+		const poisoned: number[] = [];
+		const tx = this.db.transaction((idList: number[], timeoutIds: number[]) => {
+			for (const id of idList) {
+				const row = this.db
+					.query(
+						"SELECT id, session_id, session_key, gate_decision_json, session_summary_json, enqueued_at, retry_count, consecutive_timeouts FROM evolution_queue WHERE id = ?",
+					)
+					.get(id) as QueueRow | null;
+				if (!row) continue;
+
+				const isTimeout = timeoutIds.includes(id);
+				const nextCount = isTimeout ? row.consecutive_timeouts + 1 : 0;
+
+				if (nextCount >= POISON_TIMEOUT_THRESHOLD) {
+					const reason = `Consecutive timeout ceiling (${POISON_TIMEOUT_THRESHOLD}) exceeded`;
+					this.db.run(
+						`INSERT INTO evolution_queue_poison (session_id, session_key, gate_decision_json, session_summary_json, original_enqueued_at, failure_reason)
+						VALUES (?, ?, ?, ?, ?, ?)`,
+						[
+							row.session_id,
+							row.session_key,
+							row.gate_decision_json,
+							row.session_summary_json,
+							row.enqueued_at,
+							reason,
+						],
+					);
+					this.db.run("DELETE FROM evolution_queue WHERE id = ?", [id]);
+					poisoned.push(id);
+				} else {
+					this.db.run("UPDATE evolution_queue SET consecutive_timeouts = ? WHERE id = ?", [nextCount, id]);
+				}
+			}
+		});
+		tx(ids, timedOutIds);
+		return { poisoned };
+	}
+
+	/**
 	 * Return every row in the poison pile. The CLI helper that will consume
 	 * this ships in a follow-up PR per locked decision 3; the method lives
 	 * here today because the reflection subprocess path needs the plumbing
@@ -237,5 +291,6 @@ function parseRow(row: QueueRow): QueuedSession {
 		session_summary: summary,
 		enqueued_at: row.enqueued_at,
 		retry_count: row.retry_count ?? 0,
+		consecutive_timeouts: row.consecutive_timeouts ?? 0,
 	};
 }

@@ -1,4 +1,5 @@
 import type { EvolutionEngine } from "./engine.ts";
+import type { EvolutionQueue } from "./queue.ts";
 import type { QueuedSession } from "./queue.ts";
 import type { ReflectionSubprocessResult } from "./types.ts";
 
@@ -42,7 +43,11 @@ function isSuccessDisposition(disposition: BatchDisposition): boolean {
 	return disposition === "ok" || disposition === "skip";
 }
 
-export async function processBatch(queuedSessions: QueuedSession[], engine: EvolutionEngine): Promise<BatchResult> {
+export async function processBatch(
+	queuedSessions: QueuedSession[],
+	engine: EvolutionEngine,
+	queue: EvolutionQueue,
+): Promise<BatchResult> {
 	const startedAt = Date.now();
 	if (queuedSessions.length === 0) {
 		return { processed: 0, successCount: 0, failureCount: 0, results: [], durationMs: 0 };
@@ -76,6 +81,21 @@ export async function processBatch(queuedSessions: QueuedSession[], engine: Evol
 		error: success ? null : (result.error ?? defaultErrorFor(disposition)),
 		result,
 	}));
+
+	// Fix D: track consecutive timeouts and poison rows that exceed the threshold
+	const allIds = queuedSessions.map((q) => q.id);
+	const timedOutIds = result.error === "timeout" ? allIds : [];
+	const { poisoned } = queue.incrementConsecutiveTimeouts(allIds, timedOutIds);
+
+	// If any rows were poisoned due to timeout ceiling, update their disposition
+	if (poisoned.length > 0) {
+		for (const entry of results) {
+			if (poisoned.includes(entry.id)) {
+				entry.disposition = "invariant_failed";
+				entry.error = "Consecutive timeout ceiling exceeded";
+			}
+		}
+	}
 
 	return {
 		processed: results.length,

@@ -20,6 +20,7 @@ export type NextcloudChannelConfig = {
 	webhookPath?: string;
 	port?: number;
 	sessionWindowMinutes?: number;
+	botId?: string; // Fix #12: Bot's own ID for self-filtering to prevent bot loops
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -338,8 +339,15 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		// Fix #12: Bot loop guard - ignore messages from applications/bots
+		// Fix #12: Bot loop guard - ignore messages from applications/bots and self
+		// Multiple bots in the same room can trigger each other without this check
 		if (actorType === "Application") {
+			return { status: 200, error: undefined };
+		}
+		// If bot ID is configured, ignore messages where actorId matches the bot's own ID
+		// This prevents the bot from processing its own messages in multi-bot rooms
+		if (this.config.botId && actorId === this.config.botId) {
+			console.log(`[nextcloud] Ignoring message from self (botId=${actorId})`);
 			return { status: 200, error: undefined };
 		}
 

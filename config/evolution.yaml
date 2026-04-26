@@ -11,6 +11,17 @@ reflection:
   # "never" disables unconditionally (e.g. for offline CI)
   enabled: "auto"
 
+# Judge subprocess timeouts (milliseconds). Provider-aware defaults are applied
+# based on phantom.yaml:provider.type. Explicit values here override defaults.
+# Default values per provider:
+#   - anthropic: haiku=60000, sonnet=180000, opus=300000
+#   - zai: haiku=240000, sonnet=360000, opus=600000 (GLM-4.5-Air is ~4x slower)
+#   - other providers: same as anthropic
+# judge_timeouts_ms:
+#   haiku: 60000
+#   sonnet: 180000
+#   opus: 300000
+
 # Directory paths (relative to project root)
 paths:
   config_dir: "phantom-config"

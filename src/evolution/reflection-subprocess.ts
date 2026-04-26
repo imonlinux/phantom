@@ -35,11 +35,45 @@ import type { DirectorySnapshot } from "./versioning.ts";
 // NOT pre-filter observations. It snapshots, spawns, parses the sentinel,
 // byte-compares the post state, commits or rolls back.
 
-const TIER_TIMEOUTS_MS: Record<ReflectionTier, number> = {
-	haiku: 240_000,    // was 60_000 — bumped for glm-4.5-air via z.ai
-	sonnet: 360_000,   // was 180_000
-	opus: 600_000,     // was 300_000
-};
+// Provider-aware timeout defaults. Different LLM providers have different
+// latency characteristics; these defaults are tuned for known providers.
+// Operators can override in config/evolution.yaml under judge_timeouts_ms.
+function getProviderDefaultTimeouts(providerType: string): Record<ReflectionTier, number> {
+	// Z.AI GLM-4.5-Air is ~4x slower than Anthropic Claude
+	if (providerType === "zai") {
+		return {
+			haiku: 240_000,
+			sonnet: 360_000,
+			opus: 600_000,
+		};
+	}
+	// Default for Anthropic and all other providers
+	return {
+		haiku: 60_000,
+		sonnet: 180_000,
+		opus: 300_000,
+	};
+}
+
+/**
+ * Resolve judge timeouts from config with provider-aware fallback.
+ * Explicit config values override defaults; missing tiers fall back to
+ * provider-specific defaults based on phantom.yaml:provider.type.
+ */
+export function resolveTimeouts(
+	config: EvolutionConfig,
+	phantomConfig: PhantomConfig | null,
+): Record<ReflectionTier, number> {
+	const providerType = phantomConfig?.provider?.type ?? "anthropic";
+	const defaults = getProviderDefaultTimeouts(providerType);
+	const explicit = config.judge_timeouts_ms;
+
+	return {
+		haiku: explicit?.haiku ?? defaults.haiku,
+		sonnet: explicit?.sonnet ?? defaults.sonnet,
+		opus: explicit?.opus ?? defaults.opus,
+	};
+}
 
 const TIER_MODELS: Record<ReflectionTier, string> = {
 	haiku: JUDGE_MODEL_HAIKU,
@@ -118,6 +152,9 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 	const drainId = `batch-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 	const stats: Partial<ReflectionStats> = emptyStatsDelta();
 
+	// Resolve timeouts from config with provider-aware fallback
+	const tierTimeouts = resolveTimeouts(input.config, input.phantomConfig);
+
 	const baseResult: ReflectionSubprocessResult = {
 		drainId,
 		status: "skip",
@@ -167,7 +204,7 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 		});
 
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), TIER_TIMEOUTS_MS[tier]);
+		const timer = setTimeout(() => controller.abort(), tierTimeouts[tier]);
 		const runner: QueryRunner = runnerOverride ?? defaultRunner;
 		let queryResult: SpawnQueryResult;
 		try {

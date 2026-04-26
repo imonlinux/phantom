@@ -26,6 +26,13 @@ export const EvolutionConfigSchema = z.object({
 			session_log: z.string().default("phantom-config/memory/session-log.jsonl"),
 		})
 		.default({}),
+	judge_timeouts_ms: z
+		.object({
+			haiku: z.number().int().positive().optional(),
+			sonnet: z.number().int().positive().optional(),
+			opus: z.number().int().positive().optional(),
+		})
+		.optional(),
 });
 
 export type EvolutionConfig = z.infer<typeof EvolutionConfigSchema>;

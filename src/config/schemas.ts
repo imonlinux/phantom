@@ -122,6 +122,9 @@ export const NextcloudChannelConfigSchema = z.object({
 	talk_server: z.string().min(1),
 	room_token: z.string().min(1),
 	webhook_path: z.string().default("/nextcloud/webhook"),
+	port: z.number().int().min(1).max(65535).default(3200),
+	bot_id: z.string().optional(),
+	session_window_minutes: z.number().int().min(1).default(30),
 });
 
 export const ChannelsConfigSchema = z.object({

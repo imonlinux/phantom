@@ -116,16 +116,18 @@ export const WebhookChannelConfigSchema = z.object({
 	sync_timeout_ms: z.number().int().min(1000).default(25000),
 });
 
-export const NextcloudChannelConfigSchema = z.object({
-	enabled: z.boolean().default(false),
-	shared_secret: z.string().min(16),
-	talk_server: z.string().min(1),
-	room_token: z.string().min(1),
-	webhook_path: z.string().default("/nextcloud/webhook"),
-	port: z.number().int().min(1).max(65535).default(3200),
-	bot_id: z.string().optional(),
-	session_window_minutes: z.number().int().min(1).default(30),
-});
+export const NextcloudChannelConfigSchema = z
+	.object({
+		enabled: z.boolean().default(false),
+		shared_secret: z.string().min(16),
+		talk_server: z.string().min(1),
+		room_token: z.string().min(1),
+		webhook_path: z.string().default("/nextcloud/webhook"),
+		port: z.number().int().min(1).max(65535).default(3200),
+		bot_id: z.string().optional(),
+		session_window_minutes: z.number().int().min(1).default(30),
+	})
+	.strict();
 
 export const ChannelsConfigSchema = z.object({
 	slack: SlackChannelConfigSchema.optional(),

@@ -13,7 +13,7 @@ import { createProgressStream } from "./channels/progress-stream.ts";
 import { ChannelRouter } from "./channels/router.ts";
 import { setActionFollowUpHandler } from "./channels/slack-actions.ts";
 import { SlackChannel } from "./channels/slack.ts";
-import { createStatusReactionController } from "./channels/status-reactions.ts";
+import { createStatusReactionController, type StatusEmojis } from "./channels/status-reactions.ts";
 import { TelegramChannel } from "./channels/telegram.ts";
 import { WebhookChannel } from "./channels/webhook.ts";
 import { loadChannelsConfig, loadConfig } from "./config/loader.ts";
@@ -72,6 +72,22 @@ import {
 	setSecretsDb,
 } from "./ui/serve.ts";
 import { createWebUiToolServer } from "./ui/tools.ts";
+
+// Nextcloud Talk uses raw Unicode reactions (not short names like Slack).
+// All emoji are single-codepoint where possible; ⚠ uses U+26A0 without the
+// VS-16 variation selector per Fix #8 to avoid validation issues on some
+// Talk deployments.
+const NEXTCLOUD_EMOJIS: StatusEmojis = {
+	queued: "👀",
+	thinking: "🧠",
+	tool: "🔧",
+	coding: "💻",
+	web: "🌐",
+	done: "✅",
+	error: "\u26A0",
+	stallSoft: "⏳",
+	stallHard: "❗",
+};
 
 async function main(): Promise<void> {
 	const startedAt = Date.now();
@@ -536,6 +552,30 @@ async function main(): Promise<void> {
 			statusReactions.setQueued();
 		}
 
+		// Nextcloud: set up status reactions on the user's message
+		// (parity with Slack — uses the same StatusReactionController)
+		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
+			const nc = nextcloudChannel;
+			const rt = nextcloudRoomToken;
+			const mid = nextcloudMessageId;
+			statusReactions = createStatusReactionController({
+				adapter: {
+					addReaction: async (emoji) => {
+						await nc.setReaction(rt, mid, emoji, true);
+					},
+					removeReaction: async (emoji) => {
+						await nc.setReaction(rt, mid, emoji, false);
+					},
+				},
+				emojis: NEXTCLOUD_EMOJIS,
+				onError: (err) => {
+					const errMsg = err instanceof Error ? err.message : String(err);
+					console.warn(`[nextcloud] Reaction error: ${errMsg}`);
+				},
+			});
+			statusReactions.setQueued();
+		}
+
 		// Slack: set up progress streaming in the thread
 		let progressStream: ReturnType<typeof createProgressStream> | null = null;
 		if (isSlack && slackChannel && slackChannelId && slackThreadTs) {
@@ -561,11 +601,6 @@ async function main(): Promise<void> {
 		// Telegram: start typing indicator
 		if (isTelegram && telegramChannel && telegramChatId) {
 			telegramChannel.startTyping(telegramChatId);
-		}
-
-		// Nextcloud: set initial reaction
-		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
-			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
 		}
 
 		// Fix #11: Track error events instead of text sniffing
@@ -595,16 +630,9 @@ async function main(): Promise<void> {
 						break;
 				}
 			});
-		} finally {
-			// Fix #C: Always clear the thinking reaction for Nextcloud, even on error
-			if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
-				try {
-					await nextcloudChannel.clearMessageReaction(nextcloudRoomToken, nextcloudMessageId, "thinking");
-				} catch {
-					// Ignore if already cleared or message deleted
-				}
-			}
 		}
+		// (no finally block — the controller's setDone()/setError() below handles cleanup,
+		// and statusReactions?.dispose() in the cleanup block handles the abort case)
 
 		// Track assistant messages
 		if (response.text) {
@@ -623,13 +651,6 @@ async function main(): Promise<void> {
 		// Telegram: stop typing, send response
 		if (isTelegram && telegramChannel && telegramChatId) {
 			telegramChannel.stopTyping(telegramChatId);
-		}
-
-		// Fix #11: Set final Nextcloud reaction after successful processing
-		// Fix #D: Use combined error signal for reaction determination
-		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
-			const finalReaction = isError ? "error" : "done";
-			await nextcloudChannel.setMessageReaction(nextcloudRoomToken, nextcloudMessageId, finalReaction);
 		}
 
 		// Deliver the response

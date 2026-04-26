@@ -394,10 +394,6 @@ export class NextcloudChannel implements Channel {
 			}
 		}
 		const conversationId = `nextcloud:${roomToken}:${threadRoot}`;
-		// Set reaction to show processing
-		if (msgId !== undefined) {
-			await this.setReaction(roomToken, msgId, "🧠", true);
-		}
 
 		// Fix #4: Use crypto.randomUUID() instead of Date.now()
 		const inbound: InboundMessage = {
@@ -422,10 +418,14 @@ export class NextcloudChannel implements Channel {
 				// Fix #3: Avoid msgId/msg name collision
 				const errMsg = err instanceof Error ? err.message : String(err);
 				console.error(`[nextcloud] Error handling message: ${errMsg}`);
+				// Synchronous handler failure: the StatusReactionController in index.ts
+				// may not have had a chance to react. Set ⚠ directly as a last-resort
+				// fallback. This is the only place the channel touches reactions
+				// outside of setReaction() being called by the controller adapter.
 				if (msgId !== undefined) {
-					await this.setReaction(roomToken, msgId, "🧠", false);
-					// Fix #8: Use emoji without variation selector to avoid validation issues
-					await this.setReaction(roomToken, msgId, "\u26A0", true); // ⚠ without variation selector
+					await this.setReaction(roomToken, msgId, "\u26A0", true).catch(() => {
+						// Best-effort fallback; nothing to do if it fails.
+					});
 				}
 				return { status: 500, error: "Message handling failed" };
 			}
@@ -656,19 +656,4 @@ export class NextcloudChannel implements Channel {
 		return conversationId.slice(prefix.length);
 	}
 
-	/**
-	 * Set reactions on messages when the agent responds.
-	 * This is called by the status reactions system if extended for Nextcloud.
-	 */
-	async setMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<boolean> {
-		// Fix #8: Use emoji without variation selector to avoid validation issues
-		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "\u26A0"; // ⚠ without variation selector
-		return await this.setReaction(roomToken, messageId, emoji, true);
-	}
-
-	async clearMessageReaction(roomToken: string, messageId: number, reaction: "thinking" | "done" | "error"): Promise<boolean> {
-		// Fix #8: Use emoji without variation selector to avoid validation issues
-		const emoji = reaction === "thinking" ? "🧠" : reaction === "done" ? "✅" : "\u26A0"; // ⚠ without variation selector
-		return await this.setReaction(roomToken, messageId, emoji, false);
-	}
 }

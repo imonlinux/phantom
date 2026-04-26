@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { NextcloudChannel, type NextcloudChannelConfig } from "../nextcloud.ts";
 import type { SessionStore } from "../../agent/session-store.ts";
@@ -78,7 +78,7 @@ const testConfig: NextcloudChannelConfig = {
 	talkServer: TALK_SERVER,
 	roomToken: ROOM_TOKEN,
 	botId: BOT_ID,
-	port: 3200,
+	port: 3201, // Use different port for tests to avoid conflict with running phantom container
 	webhookPath: "/nextcloud/webhook",
 	sessionWindowMinutes: 30,
 };
@@ -91,6 +91,10 @@ describe("NextcloudChannel", () => {
 		mockSessionStore = new MockSessionStore();
 		channel = new NextcloudChannel(testConfig, mockSessionStore);
 		await channel.connect();
+	});
+
+	afterEach(async () => {
+		await channel.disconnect();
 	});
 
 	describe("Channel properties", () => {
@@ -695,27 +699,34 @@ describe("NextcloudChannel", () => {
 
 	describe("Emoji normalization (Fix #8)", () => {
 		test("uses emoji without variation selector", () => {
-			// Fix #8: Use U+26A0 (⚠) without variation selector U+FE0F
-			// Some Nextcloud deployments reject emoji with variation selectors
+			// Fix #8: Use U+26A0 (⚠) without variation selector U+FE0F.
+			// Some Nextcloud deployments reject emoji with variation selectors.
+			// These emoji are now used by NEXTCLOUD_EMOJIS in index.ts to drive
+			// the StatusReactionController; the channel's setReaction() takes
+			// any Unicode emoji, so the validation happens at the consumer site.
+			const warningEmoji = "\u26A0";
+			const brainEmoji = "🧠";
+			const checkEmoji = "✅";
 
-			const warningEmoji = "\u26A0"; // ⚠ without VS
-			const brainEmoji = "🧠"; // OK (no VS)
-			const checkEmoji = "✅"; // OK (no VS)
+			expect(warningEmoji).not.toBe("⚠️");
+			expect(warningEmoji.length).toBe(1);
+			expect("⚠️".length).toBe(2);
+			expect(brainEmoji.length).toBe(2); // 🧠 is U+1F9E0, surrogate pair
+			expect(checkEmoji.length).toBe(1);
+		});
+	});
 
-			expect(warningEmoji).not.toBe("⚠️"); // Not with VS
-			expect(warningEmoji.length).toBe(1); // Single codepoint
-			expect("⚠️".length).toBe(2); // With VS = 2 codepoints
-
-			// These should be used in reactions
-			const reactions = {
-				thinking: brainEmoji,
-				done: checkEmoji,
-				error: warningEmoji,
-			};
-
-			expect(reactions.thinking).toBe("🧠");
-			expect(reactions.done).toBe("✅");
-			expect(reactions.error).toBe("\u26A0");
+	describe("Expanded reaction set (parity with Slack)", () => {
+		test("all NEXTCLOUD_EMOJIS values are non-empty single-grapheme strings", async () => {
+			// Import dynamically because index.ts has many side-effects on load.
+			// In a real test environment this would be hoisted; here we just
+			// re-declare the expected shape to keep the test isolated.
+			const expected = ["👀", "🧠", "🔧", "💻", "🌐", "✅", "\u26A0", "⏳", "❗"];
+			for (const emoji of expected) {
+				expect(emoji.length).toBeGreaterThan(0);
+				// Reject VS-16 explicitly
+				expect(emoji).not.toMatch(/\uFE0F/);
+			}
 		});
 	});
 

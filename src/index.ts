@@ -607,32 +607,27 @@ async function main(): Promise<void> {
 		let hadErrorEvent = false;
 		let response: AgentResponse;
 
-		try {
-			// Fix #C: Wrap in try/finally to ensure thinking reaction is always cleared
-			response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
-				switch (event.type) {
-					case "init":
-						console.log(`\n[phantom] Session: ${event.sessionId}`);
-						break;
-					case "thinking":
-						statusReactions?.setThinking();
-						break;
-					case "tool_use":
-						statusReactions?.setTool(event.tool);
-						if (progressStream) {
-							const summary = formatToolActivity(event.tool, event.input);
-							progressStream.addToolActivity(event.tool, summary);
-						}
-						break;
-					case "error":
-						hadErrorEvent = true;
-						statusReactions?.setError();
-						break;
-				}
-			});
-		}
-		// (no finally block — the controller's setDone()/setError() below handles cleanup,
-		// and statusReactions?.dispose() in the cleanup block handles the abort case)
+		response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
+            switch (event.type) {
+                case "init":
+                    console.log(`\n[phantom] Session: ${event.sessionId}`);
+                    break;
+                case "thinking":
+                    statusReactions?.setThinking();
+                    break;
+                case "tool_use":
+                    statusReactions?.setTool(event.tool);
+                    if (progressStream) {
+                        const summary = formatToolActivity(event.tool, event.input);
+                        progressStream.addToolActivity(event.tool, summary);
+                    }
+                    break;
+                case "error":
+                    hadErrorEvent = true;
+                    statusReactions?.setError();
+                    break;
+            }
+        });
 
 		// Track assistant messages
 		if (response.text) {

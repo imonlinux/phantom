@@ -36,9 +36,9 @@ describe("runMigrations", () => {
 
 		const migrationCount = db.query("SELECT COUNT(*) as count FROM _migrations").get() as { count: number };
 		// Migration history: base 28 + chat channel tables 28-39 (12 entries) +
-		// auth/push 40-43 (4 entries) + scheduler audit 44-45 (2 entries) +
-		// phantom-config audit section column 46 = 47.
-		expect(migrationCount.count).toBe(47);
+        // auth/push 40-43 (4 entries) + scheduler audit 44-45 (2 entries) +
+        // phantom-config audit section column 46 + Fix D consecutive_timeouts 47 = 48.
+		expect(migrationCount.count).toBe(48);
 	});
 
 	test("tracks applied migration indices", () => {

@@ -110,6 +110,9 @@ export class TelegramChannel implements Channel {
 	private static readonly HEALTHCHECK_INTERVAL_MS = 60_000;
 	private static readonly RECONNECT_BACKOFF_BASE_MS = 1_000;
 	private static readonly RECONNECT_BACKOFF_CAP_MS = 60_000;
+	// Maximum wait for bot.stop() to resolve cleanly before forcing teardown.
+	// Docker's default SIGTERM grace is 10s, so we need to come in well under.
+	private static readonly STOP_TIMEOUT_MS = 5_000;
 	// Brief delay between bot.stop() and the next bot.launch() to let
 	// Telegram release the long-poll slot server-side.
 	private static readonly RECONNECT_STOP_DELAY_MS = 1_000;
@@ -120,23 +123,20 @@ export class TelegramChannel implements Channel {
 
 	async connect(): Promise<void> {
 		if (this.connectionState === "connected") return;
-		this.connectionState = "connecting";
 
-		try {
-			const { Telegraf } = await import("telegraf");
-			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
-
-			this.registerHandlers();
-			await this.bot.launch();
-			this.connectionState = "connected";
-			this.reconnectAttempts = 0;
-			this.startHealthCheck();
-			console.log("[telegram] Bot connected via long polling");
-		} catch (err: unknown) {
-			this.connectionState = "error";
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error(`[telegram] Failed to connect: ${msg}`);
-			throw err;
+		// Try the initial connect. If it fails (typically because a previous
+		// process didn't release the long-poll slot — common when Docker
+		// SIGKILLs during shutdown), don't throw: schedule a supervised
+		// reconnect and let the rest of the app come up. Slack and other
+		// channels can still work while Telegram retries in the background.
+		const launched = await this.tryLaunch();
+		if (!launched) {
+			console.warn(
+				"[telegram] Initial connect failed; scheduling background reconnect. " +
+					"Other channels will continue normally.",
+			);
+			// Schedule the first reconnect attempt without blocking startup.
+			void this.reconnect();
 		}
 	}
 
@@ -150,15 +150,77 @@ export class TelegramChannel implements Channel {
 		}
 		this.typingTimers.clear();
 
-		try {
-			this.bot?.stop();
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[telegram] Error during disconnect: ${msg}`);
-		}
+		// Race bot.stop() against a hard timeout. Telegraf's stop() waits
+		// for in-flight polls to complete, which can exceed Docker's
+		// SIGTERM-to-SIGKILL window. If we time out, the slot stays held
+		// server-side until Telegram's connection timeout (~90s) — but
+		// at least we exit cleanly so the rest of shutdown continues.
+		await this.stopBotWithTimeout();
 
 		this.connectionState = "disconnected";
 		console.log("[telegram] Disconnected");
+	}
+
+	/**
+	 * Attempt a single bot.launch(). On success, transitions to connected
+	 * and starts the healthcheck. On failure, leaves state as "error" and
+	 * returns false so the caller can decide to retry. Never throws.
+	 */
+	private async tryLaunch(): Promise<boolean> {
+		this.connectionState = "connecting";
+		try {
+			const { Telegraf } = await import("telegraf");
+			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
+			this.registerHandlers();
+			await this.bot.launch();
+			this.connectionState = "connected";
+			this.reconnectAttempts = 0;
+			this.startHealthCheck();
+			console.log("[telegram] Bot connected via long polling");
+			return true;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Failed to connect: ${msg}`);
+			this.connectionState = "error";
+			this.bot = null;
+			return false;
+		}
+	}
+
+	/**
+	 * Stop the bot with a hard timeout. Returns when stop completes or the
+	 * timeout elapses, whichever comes first. Never throws.
+	 */
+	private async stopBotWithTimeout(): Promise<void> {
+		if (!this.bot) return;
+		const bot = this.bot;
+
+		// Telegraf's bot.stop() is synchronous in signature but kicks off
+		// async cleanup internally. We wrap it in a Promise we can race.
+		const stopPromise = new Promise<void>((resolve) => {
+			try {
+				bot.stop();
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn(`[telegram] Error during stop: ${msg}`);
+			}
+			// Give Telegraf a moment to wind down its poll loop. We don't
+			// have a Promise to await on bot.stop() in older Telegraf
+			// versions, so this short tick is the best we can do.
+			setTimeout(resolve, 100);
+		});
+
+		const timeoutPromise = new Promise<void>((resolve) => {
+			setTimeout(() => {
+				console.warn(
+					`[telegram] bot.stop() timed out after ${TelegramChannel.STOP_TIMEOUT_MS}ms; ` +
+						"polling slot may take ~90s to release server-side",
+				);
+				resolve();
+			}, TelegramChannel.STOP_TIMEOUT_MS);
+		});
+
+		await Promise.race([stopPromise, timeoutPromise]);
 	}
 
 	async send(conversationId: string, message: OutboundMessage): Promise<SentMessage> {
@@ -422,13 +484,9 @@ export class TelegramChannel implements Channel {
 		this.stopHealthCheck();
 
 		try {
-			// Tear down the dead bot. Failures here are expected and ignored —
-			// the connection is already broken; we just need the slot freed.
-			try {
-				this.bot?.stop();
-			} catch {
-				// no-op
-			}
+			// Tear down the dead bot. Use the timeout version to avoid
+			// hanging shutdown if the poll loop is wedged.
+			await this.stopBotWithTimeout();
 			this.bot = null;
 			this.connectionState = "disconnected";
 
@@ -438,15 +496,16 @@ export class TelegramChannel implements Channel {
 
 			if (this.shutdownRequested) return;
 
-			this.connectionState = "connecting";
-			const { Telegraf } = await import("telegraf");
-			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
-			this.registerHandlers();
-			await this.bot.launch();
-			this.connectionState = "connected";
-			this.reconnectAttempts = 0;
-			this.startHealthCheck();
-			console.log("[telegram] Reconnected successfully");
+			// Try to launch. If it fails, the error handler will schedule
+			// the next reconnect attempt with exponential backoff.
+			const launched = await this.tryLaunch();
+			if (launched) {
+				console.log("[telegram] Reconnected successfully");
+			} else {
+				// tryLaunch already set state to "error", so we just need to
+				// schedule the next reconnect.
+				throw new Error("tryLaunch failed");
+			}
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.reconnectAttempts++;
@@ -458,7 +517,6 @@ export class TelegramChannel implements Channel {
 				`[telegram] Reconnect attempt ${this.reconnectAttempts} failed: ${msg}; ` +
 					`retrying in ${backoffMs}ms`,
 			);
-			this.connectionState = "error";
 			// Schedule the next attempt without holding isReconnecting across
 			// the timer — the recursive call will re-acquire it.
 			setTimeout(() => {

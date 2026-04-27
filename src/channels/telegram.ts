@@ -11,6 +11,7 @@
  */
 
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
 
 type TelegrafBot = {
 	launch: () => Promise<void>;
@@ -452,10 +453,18 @@ export class TelegramChannel implements Channel {
 	 * Returns the message_id of the message containing the final response
 	 * (either the edited progress message or the new fresh message).
 	 */
-	async finishProgressMessage(chatId: number, messageId: number, text: string): Promise<number> {
+	async finishProgressMessage(
+		chatId: number,
+		messageId: number,
+		text: string,
+		attachFeedback = false,
+	): Promise<number> {
 		if (!this.bot) throw new Error("Telegram bot not connected");
 
 		const escaped = escapeMarkdownV2(text);
+		const replyMarkup = attachFeedback
+			? { reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() } }
+			: {};
 
 		// If we're already over the limit, skip the doomed edit.
 		if (escaped.length > TELEGRAM_MAX_MESSAGE_LENGTH) {
@@ -463,13 +472,17 @@ export class TelegramChannel implements Channel {
 				`[telegram] Final response exceeds ${TELEGRAM_MAX_MESSAGE_LENGTH} chars; ` +
 					"sending as fresh message (Phase 5 will split properly)",
 			);
-			const result = await this.bot.telegram.sendMessage(chatId, escaped, { parse_mode: "MarkdownV2" });
+			const result = await this.bot.telegram.sendMessage(chatId, escaped, {
+				parse_mode: "MarkdownV2",
+				...replyMarkup,
+			});
 			return result.message_id;
 		}
 
 		try {
 			await this.bot.telegram.editMessageText(chatId, messageId, undefined, escaped, {
 				parse_mode: "MarkdownV2",
+				...replyMarkup,
 			});
 			return messageId;
 		} catch (err: unknown) {
@@ -482,12 +495,33 @@ export class TelegramChannel implements Channel {
 				`[telegram] Failed to finalize progress message (${msg}); sending response as fresh message`,
 			);
 			try {
-				const result = await this.bot.telegram.sendMessage(chatId, escaped, { parse_mode: "MarkdownV2" });
+				const result = await this.bot.telegram.sendMessage(chatId, escaped, {
+					parse_mode: "MarkdownV2",
+					...replyMarkup,
+				});
 				return result.message_id;
 			} catch (sendErr: unknown) {
 				const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
 				console.error(`[telegram] Failed to send fallback response: ${sendMsg}`);
 				throw sendErr;
+			}
+		}
+	}
+
+	/**
+	 * P2.3: Remove the inline keyboard from a message after the user clicks
+	 * a feedback button. Leaves the message text intact — only the buttons
+	 * are cleared. Best-effort; errors are warned but not thrown.
+	 */
+	async clearMessageButtons(chatId: number, messageId: number): Promise<void> {
+		if (!this.bot) return;
+		try {
+			await this.bot.telegram.editMessageReplyMarkup(chatId, messageId, undefined, undefined);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			// "message is not modified" is benign — buttons were already cleared.
+			if (!msg.includes("message is not modified")) {
+				console.warn(`[telegram] Failed to clear message buttons: ${msg}`);
 			}
 		}
 	}
@@ -541,6 +575,40 @@ export class TelegramChannel implements Channel {
 			}
 		});
 
+		// P2.3: Feedback button clicks are intercepted and routed to
+		// emitFeedback, NOT to the runtime. Other phantom:* callbacks
+		// (action-button hints from P2.5, etc.) continue to route as
+		// inbound messages.
+		this.bot.action(/^phantom:feedback:(positive|negative|partial)$/, async (ctx) => {
+			if (ctx.answerCbQuery) {
+				await ctx.answerCbQuery();
+			}
+
+			const data = ctx.callbackQuery?.data;
+			const type = data ? parseFeedbackAction(data) : null;
+			if (!type) return;
+
+			const chatId = ctx.callbackQuery?.message?.chat.id;
+			const messageId = ctx.callbackQuery?.message?.message_id;
+			if (chatId === undefined || messageId === undefined) return;
+
+			const userId = String(ctx.from?.id ?? "unknown");
+			const conversationId = `telegram:${chatId}`;
+
+			emitFeedback({
+				type,
+				conversationId,
+				messageTs: String(messageId),
+				userId,
+				source: "button",
+				timestamp: Date.now(),
+			});
+
+			// Clear the buttons so the user can't click again.
+			await this.clearMessageButtons(chatId, messageId);
+		});
+
+		// Handle other inline keyboard button presses (action hints from agent)
 		this.bot.action(/^phantom:(.+)$/, async (ctx) => {
 			if (ctx.answerCbQuery) {
 				await ctx.answerCbQuery();
@@ -548,6 +616,12 @@ export class TelegramChannel implements Channel {
 
 			const data = ctx.match?.[1];
 			if (!data || !this.messageHandler) return;
+
+			// Skip feedback callbacks — handled by the more specific handler above.
+			// Telegraf calls handlers in registration order; the specific feedback
+			// pattern matches first and the broader pattern wouldn't normally fire
+			// for those, but we double-check for safety against framework changes.
+			if (data.startsWith("feedback:")) return;
 
 			const chatId = ctx.callbackQuery?.message?.chat.id;
 			if (!chatId) return;

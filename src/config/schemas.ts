@@ -88,6 +88,11 @@ export const SlackChannelConfigSchema = z.object({
 export const TelegramChannelConfigSchema = z.object({
 	enabled: z.boolean().default(false),
 	bot_token: z.string().min(1),
+	// P2.4: opt-in for reaction-as-feedback in groups. The bot must be a
+	// chat administrator for Telegram to deliver message_reaction updates.
+	// Has no effect in 1:1 DMs (no admin role exists). Defaults to false
+	// since Phantom Telegram's primary use case is 1:1.
+	enable_message_reactions: z.boolean().default(false),
 });
 
 export const EmailChannelConfigSchema = z.object({

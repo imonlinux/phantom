@@ -14,11 +14,12 @@ import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, Sen
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
 
 type TelegrafBot = {
-	launch: () => Promise<void>;
+	launch: (opts?: { allowedUpdates?: string[] }) => Promise<void>;
 	stop: () => void;
 	command: (cmd: string, handler: (ctx: TelegrafContext) => Promise<void>) => void;
 	on: (event: string, handler: (ctx: TelegrafContext) => Promise<void>) => void;
 	action: (pattern: RegExp, handler: (ctx: TelegrafContext) => Promise<void>) => void;
+	reaction: (emoji: string | string[], handler: (ctx: TelegrafContext) => Promise<void>) => void;
 	telegram: TelegramApi;
 };
 
@@ -68,6 +69,7 @@ type TelegrafContext = {
 
 export type TelegramChannelConfig = {
 	botToken: string;
+	enableMessageReactions?: boolean;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -184,6 +186,14 @@ export class TelegramChannel implements Channel {
 			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
 			this.registerHandlers();
 
+			// P2.4: subscribe to message_reaction updates only when the operator
+			// has opted in. Default polling does NOT include reaction events;
+			// without this, bot.reaction handlers never fire.
+			const allowedUpdates: string[] = ["message", "callback_query"];
+			if (this.config.enableMessageReactions) {
+				allowedUpdates.push("message_reaction");
+			}
+
 			// CRITICAL: bot.launch() in long-polling mode returns a promise
 			// that resolves when polling STOPS, not when it starts. Awaiting
 			// it blocks forever — leaving connectionState stuck at "connecting"
@@ -195,7 +205,7 @@ export class TelegramChannel implements Channel {
 			// stays hooked so a later polling failure (e.g., 409 Conflict
 			// from a held slot, network drop) triggers reconnect.
 			let immediateError: Error | null = null;
-			const launchPromise = this.bot.launch().catch((err: unknown) => {
+			const launchPromise = this.bot.launch({ allowedUpdates }).catch((err: unknown) => {
 				const errMsg = err instanceof Error ? err.message : String(err);
 				if (this.connectionState === "connecting") {
 					// Failure during settle window — capture for caller throw.
@@ -526,6 +536,42 @@ export class TelegramChannel implements Channel {
 		}
 	}
 
+	/**
+	 * P2.4: Map a Telegraf reaction-update context to a FeedbackSignal and
+	 * emit it. Best-effort — silently returns if the context is missing
+	 * required fields. Telegram filters out reactions set by the bot itself
+	 * server-side (per the API docs), so we don't need a self-filter here.
+	 */
+	private handleReactionFeedback(
+		ctx: TelegrafContext,
+		type: "positive" | "negative",
+	): void {
+		const update = ctx.update as unknown as {
+			message_reaction?: {
+				chat?: { id: number };
+				message_id?: number;
+				user?: { id: number };
+			};
+		};
+		const mr = update.message_reaction;
+		if (!mr?.chat?.id || mr.message_id === undefined || !mr.user?.id) {
+			// Anonymous reactions (group chats with anonymous admin) provide
+			// actor_chat instead of user. We don't accept those as feedback
+			// because there's no actionable user identity for the evolution
+			// signal. Silently drop.
+			return;
+		}
+
+		emitFeedback({
+			type,
+			conversationId: `telegram:${mr.chat.id}`,
+			messageTs: String(mr.message_id),
+			userId: String(mr.user.id),
+			source: "reaction",
+			timestamp: Date.now(),
+		});
+	}
+
 	private registerHandlers(): void {
 		if (!this.bot) return;
 
@@ -651,6 +697,25 @@ export class TelegramChannel implements Channel {
 				console.error(`[telegram] Error handling callback: ${msg}`);
 			}
 		});
+
+		// P2.4: Reaction-as-feedback. Only registered when the operator has
+		// opted in via channel config. Requires the bot to be a chat admin for
+		// Telegram to deliver these events at all.
+		if (this.config.enableMessageReactions) {
+			// 👍 / ❤ / 🔥 → positive feedback
+			this.bot.reaction(["👍", "❤", "🔥"], async (ctx) => {
+				this.handleReactionFeedback(ctx, "positive");
+			});
+			// 👎 → negative feedback
+			this.bot.reaction(["👎"], async (ctx) => {
+				this.handleReactionFeedback(ctx, "negative");
+			});
+
+			console.log(
+				"[telegram] Reaction-as-feedback enabled; bot must be admin in " +
+					"groups to receive reaction events. Has no effect in 1:1 DMs.",
+			);
+		}
 	}
 
 	/**

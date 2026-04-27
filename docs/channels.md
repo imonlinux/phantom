@@ -167,6 +167,43 @@ telegram:
 - MarkdownV2 formatting with code block preservation
 - Commands: `/start`, `/status`, `/help`
 
+### Reaction-based feedback (groups only, opt-in)
+
+Phantom can collect feedback signals from emoji reactions to its messages
+(👍 / ❤ / 🔥 → positive, 👎 → negative). This feature is **only available
+in shared groups where the bot has been promoted to administrator**.
+
+It does not work in 1:1 DMs. Telegram requires the bot to be a chat
+admin to deliver `message_reaction` updates, and 1:1 DMs have no admin
+role. There is no workaround. For DMs, use the inline-keyboard feedback
+buttons under each response.
+
+To enable in groups:
+
+\`\`\`yaml
+channels:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    enable_message_reactions: true
+\`\`\`
+
+Then, in the Telegram group:
+
+1. Add the bot to the group
+2. Promote the bot to administrator (any admin permissions are sufficient)
+3. Restart Phantom
+
+You'll see this on startup:
+
+\`\`\`
+[telegram] Reaction-as-feedback enabled; bot must be admin in groups
+to receive reaction events. Has no effect in 1:1 DMs.
+\`\`\`
+
+After restart, reactions on the bot's messages flow as feedback signals
+through the same evolution engine that processes Slack reaction feedback.
+
 ## Email
 
 IMAP/SMTP with push notifications via IDLE.

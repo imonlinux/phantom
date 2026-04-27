@@ -71,6 +71,10 @@ export type TelegramChannelConfig = {
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+// Telegram's hard message length limit. Phase 5 will add proper splitting;
+// P2.2 falls back to a fresh send when the final response exceeds this.
+const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
 export class TelegramChannel implements Channel {
 	readonly id = "telegram";
 	readonly name = "Telegram";
@@ -85,6 +89,8 @@ export class TelegramChannel implements Channel {
 		// P2.1: declare reaction support. The capability is best-effort; the
 		// per-chat circuit breaker may disable it at runtime.
 		reactions: true,
+		// P2.2: progressive tool activity updates (Working on it... → final response)
+		progressUpdates: true,
 	};
 
 	private bot: TelegrafBot | null = null;
@@ -388,6 +394,102 @@ export class TelegramChannel implements Channel {
 	/** Test seam: inspect circuit-breaker state. */
 	isReactionDisabledFor(chatId: number): boolean {
 		return this.reactionDisabledChats.has(chatId);
+	}
+
+	/**
+	 * P2.2: Post a fresh "Working on it…" message as plain text. Returns
+	 * the new message_id, or null on failure (best-effort — the caller
+	 * should fall through to typing-only signaling if this returns null).
+	 *
+	 * Plain text (no parse_mode) is intentional: the progress message is
+	 * transient, gets edited many times during a turn, and the bytes saved
+	 * by skipping MarkdownV2 escaping add up across the throttled edit
+	 * stream. The final-response edit (finishProgressMessage) does use
+	 * MarkdownV2 since the user keeps reading it.
+	 */
+	async postProgressMessage(chatId: number): Promise<number | null> {
+		if (!this.bot) return null;
+		try {
+			const result = await this.bot.telegram.sendMessage(chatId, "Working on it...");
+			return result.message_id;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[telegram] Failed to post progress message: ${msg}`);
+			return null;
+		}
+	}
+
+	/**
+	 * P2.2: Update a progress message in place with new activity. Plain
+	 * text — no MarkdownV2 escape, matching postProgressMessage.
+	 *
+	 * Best-effort: silently swallows the "message is not modified" case
+	 * (Telegram's expected response when the new text equals the old) and
+	 * warns on other failures without throwing. progress-stream.ts already
+	 * throttles to 1 update/sec which lines up with Telegram's per-chat
+	 * rate limit.
+	 */
+	async updateProgressMessage(chatId: number, messageId: number, text: string): Promise<void> {
+		if (!this.bot) return;
+		try {
+			await this.bot.telegram.editMessageText(chatId, messageId, undefined, text);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (!msg.includes("message is not modified")) {
+				console.warn(`[telegram] Failed to update progress message: ${msg}`);
+			}
+		}
+	}
+
+	/**
+	 * P2.2: Replace the progress message with the final agent response.
+	 * Uses MarkdownV2 escape since the user will read this. If the response
+	 * exceeds Telegram's 4096-char message limit (or the edit otherwise
+	 * fails), falls back to sending a fresh message and leaves the progress
+	 * line alone — the user sees both, which is preferable to losing the
+	 * response. Phase 5 will add proper splitting.
+	 *
+	 * Returns the message_id of the message containing the final response
+	 * (either the edited progress message or the new fresh message).
+	 */
+	async finishProgressMessage(chatId: number, messageId: number, text: string): Promise<number> {
+		if (!this.bot) throw new Error("Telegram bot not connected");
+
+		const escaped = escapeMarkdownV2(text);
+
+		// If we're already over the limit, skip the doomed edit.
+		if (escaped.length > TELEGRAM_MAX_MESSAGE_LENGTH) {
+			console.warn(
+				`[telegram] Final response exceeds ${TELEGRAM_MAX_MESSAGE_LENGTH} chars; ` +
+					"sending as fresh message (Phase 5 will split properly)",
+			);
+			const result = await this.bot.telegram.sendMessage(chatId, escaped, { parse_mode: "MarkdownV2" });
+			return result.message_id;
+		}
+
+		try {
+			await this.bot.telegram.editMessageText(chatId, messageId, undefined, escaped, {
+				parse_mode: "MarkdownV2",
+			});
+			return messageId;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			// "message is not modified" is benign — final text matched progress.
+			if (msg.includes("message is not modified")) {
+				return messageId;
+			}
+			console.warn(
+				`[telegram] Failed to finalize progress message (${msg}); sending response as fresh message`,
+			);
+			try {
+				const result = await this.bot.telegram.sendMessage(chatId, escaped, { parse_mode: "MarkdownV2" });
+				return result.message_id;
+			} catch (sendErr: unknown) {
+				const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+				console.error(`[telegram] Failed to send fallback response: ${sendMsg}`);
+				throw sendErr;
+			}
+		}
 	}
 
 	private registerHandlers(): void {

@@ -159,6 +159,71 @@ telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
 ```
 
+### Access control
+
+By default, Phantom's Telegram bot will respond to anyone who messages it.
+For a personal bot, you almost certainly want to lock this down to just
+yourself (and possibly a few trusted accounts).
+
+To find your Telegram numeric user ID:
+
+1. Send any message to [@userinfobot](https://t.me/userinfobot) on Telegram
+2. It replies with a card showing your `Id:` field — that's the number you want
+
+**Use the numeric ID, not your @username.** The `@username` is mutable and
+changes when you change your handle; the numeric ID is permanent. You can add
+additional Telegram users IDs to allow them access to your bot.
+
+Then add it to your .env file:
+
+```
+# ========================
+# OPTIONAL: Telegram
+# ========================
+TELEGRAM_BOT_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TELEGRAM_OWNER_USER_ID=xxxxxxxxxxx
+#TELEGRAM_OWNER_USER_ID2=
+#TELEGRAM_OWNER_USER_ID3=
+```
+
+Then update the config/channels.yaml file accordingly.
+
+```
+channels:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    owner_user_ids:
+      - ${TELEGRAM_OWNER_USER_ID}
+    # - ${TELEGRAM_OWNER_USER_ID2}   # uncomment when adding a second owner
+    # - ${TELEGRAM_OWNER_USER_ID3}
+```
+
+Behavior with access control enabled:
+
+- **Owners in 1:1 DMs:** full access, normal interaction
+- **Owners in groups:** full access (they're trusted regardless of room)
+- **Non-owners in 1:1 DMs:** receive one rejection reply explaining
+  Phantom is a personal bot, then silently dropped on subsequent messages
+- **Non-owners in groups:** silently ignored, no rejection reply (avoiding
+  noise for other group members)
+
+If you put the wrong number in the config, every message will be silently
+rejected (DMs) or silently ignored (groups). Phantom will not crash or
+lock you out — fix the YAML and restart. There's no lockable state.
+
+The startup log confirms which mode you're in:
+
+\`\`\`
+[telegram] Access control active: 1 owner ID(s) configured
+\`\`\`
+
+or
+
+\`\`\`
+[telegram] No access control configured — all users can interact with the bot
+\`\`\`
+
 ### Features
 
 - Inline keyboard buttons

@@ -7,14 +7,15 @@ import type { RuntimeEvent } from "./agent/runtime.ts";
 import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
 import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
+import { ChannelInteractionRegistry } from "./channels/interaction-adapter.ts";
 import { NextcloudChannel } from "./channels/nextcloud.ts";
-import { formatToolActivity } from "./channels/progress-stream.ts";
-import { createProgressStream } from "./channels/progress-stream.ts";
+import { createNextcloudInteractionFactory } from "./channels/nextcloud-interaction.ts";
 import { ChannelRouter } from "./channels/router.ts";
 import { setActionFollowUpHandler } from "./channels/slack-actions.ts";
 import { SlackChannel } from "./channels/slack.ts";
-import { createStatusReactionController, type StatusEmojis } from "./channels/status-reactions.ts";
+import { createSlackInteractionFactory } from "./channels/slack-interaction.ts";
 import { TelegramChannel } from "./channels/telegram.ts";
+import { createTelegramInteractionFactory } from "./channels/telegram-interaction.ts";
 import { WebhookChannel } from "./channels/webhook.ts";
 import { loadChannelsConfig, loadConfig } from "./config/loader.ts";
 import { installShutdownHandlers, onShutdown } from "./core/graceful.ts";
@@ -72,22 +73,6 @@ import {
 	setSecretsDb,
 } from "./ui/serve.ts";
 import { createWebUiToolServer } from "./ui/tools.ts";
-
-// Nextcloud Talk uses raw Unicode reactions (not short names like Slack).
-// All emoji are single-codepoint where possible; ⚠ uses U+26A0 without the
-// VS-16 variation selector per Fix #8 to avoid validation issues on some
-// Talk deployments.
-const NEXTCLOUD_EMOJIS: StatusEmojis = {
-	queued: "👀",
-	thinking: "🧠",
-	tool: "🔧",
-	coding: "💻",
-	web: "🌐",
-	done: "✅",
-	error: "\u26A0",
-	stallSoft: "⏳",
-	stallHard: "❗",
-};
 
 async function main(): Promise<void> {
 	const startedAt = Date.now();
@@ -513,6 +498,17 @@ async function main(): Promise<void> {
 
 	setOnboardingStatusProvider(() => getOnboardingStatus(db).status);
 
+	// Build the channel interaction registry. Each factory inspects an
+	// inbound message and either returns an adapter (handling status
+	// reactions, progress streams, typing, etc.) or null to opt out.
+	// Phase 1 of the Telegram parity plan: this replaces the per-channel
+	// `if (isSlack) / if (isNextcloud) / if (isTelegram)` ladder that
+	// used to live inside router.onMessage.
+	const interactionRegistry = new ChannelInteractionRegistry();
+	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
+	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel));
+	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));
+
 	const conversationMessages = new Map<string, { user: string[]; assistant: string[] }>();
 
 	router.onMessage(async (msg) => {
@@ -523,145 +519,67 @@ async function main(): Promise<void> {
 		existing.user.push(msg.text);
 		conversationMessages.set(convKey, existing);
 
-		const isSlack = msg.channelId === "slack" && slackChannel && msg.metadata;
-		const isTelegram = msg.channelId === "telegram" && telegramChannel && msg.metadata;
-		const isNextcloud = msg.channelId === "nextcloud" && nextcloudChannel && msg.metadata;
-		const slackChannelId = isSlack ? (msg.metadata?.slackChannel as string) : null;
-		const slackThreadTs = isSlack ? (msg.metadata?.slackThreadTs as string) : null;
-		const slackMessageTs = isSlack ? (msg.metadata?.slackMessageTs as string) : null;
-		const telegramChatId = isTelegram ? (msg.metadata?.telegramChatId as number) : null;
-		const nextcloudRoomToken = isNextcloud ? (msg.metadata?.nextcloudRoomToken as string) : null;
-		const nextcloudMessageId = isNextcloud ? (msg.metadata?.nextcloudMessageId as number) : null;
+		// Build per-channel interaction adapters. Each adapter handles its own
+		// status reactions, progress streams, typing, and (optionally) response
+		// delivery. The orchestration below is uniform across all channels.
+		const interactions = interactionRegistry.buildFor(msg);
 
-		// Slack: set up status reactions on the user's message
-		let statusReactions: ReturnType<typeof createStatusReactionController> | null = null;
-		if (isSlack && slackChannel && slackChannelId && slackMessageTs) {
-			const sc = slackChannel;
-			const ch = slackChannelId;
-			const mts = slackMessageTs;
-			statusReactions = createStatusReactionController({
-				adapter: {
-					addReaction: (emoji) => sc.addReaction(ch, mts, emoji),
-					removeReaction: (emoji) => sc.removeReaction(ch, mts, emoji),
-				},
-				onError: (err) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[slack] Reaction error: ${errMsg}`);
-				},
-			});
-			statusReactions.setQueued();
-		}
-
-		// Nextcloud: set up status reactions on the user's message
-		// (parity with Slack — uses the same StatusReactionController)
-		if (isNextcloud && nextcloudChannel && nextcloudMessageId && nextcloudRoomToken) {
-			const nc = nextcloudChannel;
-			const rt = nextcloudRoomToken;
-			const mid = nextcloudMessageId;
-			statusReactions = createStatusReactionController({
-				adapter: {
-					addReaction: async (emoji) => {
-						await nc.setReaction(rt, mid, emoji, true);
-					},
-					removeReaction: async (emoji) => {
-						await nc.setReaction(rt, mid, emoji, false);
-					},
-				},
-				emojis: NEXTCLOUD_EMOJIS,
-				onError: (err) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[nextcloud] Reaction error: ${errMsg}`);
-				},
-			});
-			statusReactions.setQueued();
-		}
-
-		// Slack: set up progress streaming in the thread
-		let progressStream: ReturnType<typeof createProgressStream> | null = null;
-		if (isSlack && slackChannel && slackChannelId && slackThreadTs) {
-			const sc = slackChannel;
-			const ch = slackChannelId;
-			const tts = slackThreadTs;
-			progressStream = createProgressStream({
-				adapter: {
-					postMessage: (_t) => sc.postThinking(ch, tts).then((ts) => ts ?? ""),
-					updateMessage: (msgId, updatedText) => sc.updateMessage(ch, msgId, updatedText),
-				},
-				onFinish: async (messageId, text) => {
-					await sc.updateWithFeedback(ch, messageId, text);
-				},
-				onError: (err) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[slack] Progress stream error: ${errMsg}`);
-				},
-			});
-			await progressStream.start();
-		}
-
-		// Telegram: start typing indicator
-		if (isTelegram && telegramChannel && telegramChatId) {
-			telegramChannel.startTyping(telegramChatId);
-		}
+		// Phase 1: onTurnStart hooks (e.g., Slack progress.start, Telegram typing).
+		await Promise.all(interactions.map((i) => i.onTurnStart?.()));
 
 		// Fix #11: Track error events instead of text sniffing
 		let hadErrorEvent = false;
 		let response: AgentResponse;
 
+		// Fix #C: the per-adapter dispose() in the cleanup block ensures any
+		// in-flight reactions/typing/progress is cleared even on throw.
 		response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
-            switch (event.type) {
-                case "init":
-                    console.log(`\n[phantom] Session: ${event.sessionId}`);
-                    break;
-                case "thinking":
-                    statusReactions?.setThinking();
-                    break;
-                case "tool_use":
-                    statusReactions?.setTool(event.tool);
-                    if (progressStream) {
-                        const summary = formatToolActivity(event.tool, event.input);
-                        progressStream.addToolActivity(event.tool, summary);
-                    }
-                    break;
-                case "error":
-                    hadErrorEvent = true;
-                    statusReactions?.setError();
-                    break;
-            }
-        });
+			switch (event.type) {
+				case "init":
+					console.log(`\n[phantom] Session: ${event.sessionId}`);
+					break;
+				case "error":
+					hadErrorEvent = true;
+					break;
+			}
+			// Fan every event to every adapter that wants to listen.
+			for (const i of interactions) i.onRuntimeEvent?.(event);
+		});
 
 		// Track assistant messages
-		if (response.text) {
-			existing.assistant.push(response.text);
-		}
+		if (response.text) existing.assistant.push(response.text);
 
-		// Fix #11: Use error event flag instead of text sniffing
-		// Fix #D: Belt-and-suspenders - some error paths in runtime don't emit events
+		// Fix #11+#D: combined error signal (event flag + text sniff)
 		const isError = hadErrorEvent || response.text.startsWith("Error:");
-		if (isError) {
-			await statusReactions?.setError();
-		} else {
-			await statusReactions?.setDone();
-		}
 
-		// Telegram: stop typing, send response
-		if (isTelegram && telegramChannel && telegramChatId) {
-			telegramChannel.stopTyping(telegramChatId);
-		}
-
-		// Deliver the response
-		if (progressStream) {
-			// Slack: update the progress message with the final response + feedback buttons
-			await progressStream.finish(response.text);
-		} else if (isSlack && slackChannel && slackChannelId && slackThreadTs) {
-			// Slack fallback: send direct reply with feedback
-			const thinkingTs = await slackChannel.postThinking(slackChannelId, slackThreadTs);
-			if (thinkingTs) {
-				await slackChannel.updateWithFeedback(slackChannelId, thinkingTs, response.text);
+		// Phase 2: onTurnEnd hooks (e.g., Slack setDone/setError, Telegram stopTyping).
+		// Adapters use this to emit terminal status reactions and stop typing.
+		// Status reactions are the canonical "agent is done" signal — fan to each.
+		for (const i of interactions) {
+			if (i.statusReactions) {
+				if (isError) await i.statusReactions.setError();
+				else await i.statusReactions.setDone();
 			}
-		} else {
-			// All other channels: send via router
-			// For Nextcloud, pass the original message ID as replyToId for threading
-			const replyToId = isNextcloud && nextcloudMessageId ? String(nextcloudMessageId) : undefined;
+		}
+		await Promise.all(interactions.map((i) => i.onTurnEnd?.({ text: response.text, isError })));
+
+		// Phase 3: response delivery. Each adapter's deliverResponse can claim
+		// the response (returns true). If any does, skip the router.send fallback.
+		let claimed = false;
+		for (const i of interactions) {
+			if (i.deliverResponse) {
+				const result = await i.deliverResponse({ text: response.text, isError });
+				if (result) claimed = true;
+			}
+		}
+		if (!claimed) {
+			// Default delivery: route through ChannelRouter.send. Nextcloud needs
+			// the original message ID as replyToId for threading; other channels
+			// ignore replyToId.
+			const nextcloudMessageId = msg.channelId === "nextcloud"
+				? (msg.metadata?.nextcloudMessageId as number | undefined)
+				: undefined;
+			const replyToId = nextcloudMessageId !== undefined ? String(nextcloudMessageId) : undefined;
 			await router.send(msg.channelId, msg.conversationId, {
 				text: response.text,
 				threadId: msg.threadId,
@@ -750,7 +668,7 @@ async function main(): Promise<void> {
 		}
 
 		// Clean up
-		statusReactions?.dispose();
+		for (const i of interactions) i.dispose?.();
 	});
 
 	const server = startServer(config, startedAt);

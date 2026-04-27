@@ -17,6 +17,12 @@ const mockEditMessageText = mock(
 	) => ({}),
 );
 const mockSendChatAction = mock(async (_chatId: number | string, _action: string) => {});
+const mockGetMe = mock(async () => ({
+	id: 123456,
+	is_bot: true,
+	first_name: "TestBot",
+	username: "test_bot",
+}));
 
 type HandlerFn = (ctx: Record<string, unknown>) => Promise<void>;
 const commandHandlers = new Map<string, HandlerFn>();
@@ -39,6 +45,7 @@ const MockTelegraf = mock((_token: string) => ({
 		sendMessage: mockSendMessage,
 		editMessageText: mockEditMessageText,
 		sendChatAction: mockSendChatAction,
+		getMe: mockGetMe,
 	},
 }));
 

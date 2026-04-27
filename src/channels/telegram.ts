@@ -108,6 +108,10 @@ export class TelegramChannel implements Channel {
 	private reconnectAttempts = 0;
 
 	private static readonly HEALTHCHECK_INTERVAL_MS = 60_000;
+	// Wait for immediate launch failures (bad token, fast network errors)
+	// before declaring the launch successful. Telegraf's bot.launch() never
+	// resolves on success — it only rejects on failure or when bot.stop().
+	private static readonly LAUNCH_SETTLE_MS = 2_000;
 	private static readonly RECONNECT_BACKOFF_BASE_MS = 1_000;
 	private static readonly RECONNECT_BACKOFF_CAP_MS = 60_000;
 	// Maximum wait for bot.stop() to resolve cleanly before forcing teardown.
@@ -172,7 +176,47 @@ export class TelegramChannel implements Channel {
 			const { Telegraf } = await import("telegraf");
 			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
 			this.registerHandlers();
-			await this.bot.launch();
+
+			// CRITICAL: bot.launch() in long-polling mode returns a promise
+			// that resolves when polling STOPS, not when it starts. Awaiting
+			// it blocks forever — leaving connectionState stuck at "connecting"
+			// while the bot actually polls and serves messages in the background.
+			//
+			// We start launch as a background promise, wait LAUNCH_SETTLE_MS
+			// for immediate failures, then verify responsiveness via getMe()
+			// before declaring success. The launchPromise's catch handler
+			// stays hooked so a later polling failure (e.g., 409 Conflict
+			// from a held slot, network drop) triggers reconnect.
+			let immediateError: Error | null = null;
+			const launchPromise = this.bot.launch().catch((err: unknown) => {
+				const errMsg = err instanceof Error ? err.message : String(err);
+				if (this.connectionState === "connecting") {
+					// Failure during settle window — capture for caller throw.
+					immediateError = err instanceof Error ? err : new Error(errMsg);
+				} else if (this.connectionState === "connected" && !this.shutdownRequested) {
+					// Polling died after we declared connected. Trigger
+					// reconnect immediately (don't wait for the 60s healthcheck).
+					console.warn(`[telegram] Polling loop ended: ${errMsg}; reconnecting`);
+					this.connectionState = "error";
+					void this.reconnect();
+				}
+			});
+
+			await Promise.race([
+				new Promise((resolve) => setTimeout(resolve, TelegramChannel.LAUNCH_SETTLE_MS)),
+				launchPromise,
+			]);
+
+			if (immediateError) {
+				throw immediateError;
+			}
+
+			// Verify the bot is responsive. getMe is the cheapest API call
+			// and uses a different endpoint than getUpdates, so it succeeds
+			// even when the polling slot is contested. Combined with the
+			// settle window above, this catches bad tokens immediately.
+			await this.bot.telegram.getMe();
+
 			this.connectionState = "connected";
 			this.reconnectAttempts = 0;
 			this.startHealthCheck();

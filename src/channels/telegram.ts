@@ -98,6 +98,22 @@ export class TelegramChannel implements Channel {
 	// reaction calls become no-ops for the rest of the session. Logged once.
 	private reactionDisabledChats = new Set<number>();
 
+	// Connection supervision (interim fix; Phase 8 webhook mode is the real
+	// solution). Long-polling can silently drop without Telegraf surfacing the
+	// failure to the orchestration. We periodically ping getMe to detect dead
+	// connections and reconnect with exponential backoff.
+	private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+	private isReconnecting = false;
+	private shutdownRequested = false;
+	private reconnectAttempts = 0;
+
+	private static readonly HEALTHCHECK_INTERVAL_MS = 60_000;
+	private static readonly RECONNECT_BACKOFF_BASE_MS = 1_000;
+	private static readonly RECONNECT_BACKOFF_CAP_MS = 60_000;
+	// Brief delay between bot.stop() and the next bot.launch() to let
+	// Telegram release the long-poll slot server-side.
+	private static readonly RECONNECT_STOP_DELAY_MS = 1_000;
+
 	constructor(config: TelegramChannelConfig) {
 		this.config = config;
 	}
@@ -113,6 +129,8 @@ export class TelegramChannel implements Channel {
 			this.registerHandlers();
 			await this.bot.launch();
 			this.connectionState = "connected";
+			this.reconnectAttempts = 0;
+			this.startHealthCheck();
 			console.log("[telegram] Bot connected via long polling");
 		} catch (err: unknown) {
 			this.connectionState = "error";
@@ -124,6 +142,8 @@ export class TelegramChannel implements Channel {
 
 	async disconnect(): Promise<void> {
 		if (this.connectionState === "disconnected") return;
+		this.shutdownRequested = true;
+		this.stopHealthCheck();
 
 		for (const timer of this.typingTimers.values()) {
 			clearInterval(timer);
@@ -349,6 +369,110 @@ export class TelegramChannel implements Channel {
 				console.error(`[telegram] Error handling callback: ${msg}`);
 			}
 		});
+	}
+
+	/**
+	 * Start the periodic healthcheck. Calls getMe (the cheapest Bot API
+	 * call) every HEALTHCHECK_INTERVAL_MS; on failure, triggers a
+	 * supervised reconnect with exponential backoff.
+	 *
+	 * Safe to call repeatedly — clears any existing timer first.
+	 */
+	private startHealthCheck(): void {
+		this.stopHealthCheck();
+		this.healthCheckTimer = setInterval(() => {
+			void this.runHealthCheck();
+		}, TelegramChannel.HEALTHCHECK_INTERVAL_MS);
+	}
+
+	private stopHealthCheck(): void {
+		if (this.healthCheckTimer) {
+			clearInterval(this.healthCheckTimer);
+			this.healthCheckTimer = null;
+		}
+	}
+
+	private async runHealthCheck(): Promise<void> {
+		// Skip if we're already trying to recover or shutting down.
+		if (this.isReconnecting || this.shutdownRequested) return;
+		if (this.connectionState !== "connected" || !this.bot) return;
+
+		try {
+			// getMe is a no-op identity ping — no payload, no chat, no rate
+			// implications. If it fails, the polling connection is dead.
+			await this.bot.telegram.getMe();
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[telegram] Healthcheck failed: ${msg}; attempting reconnect`);
+			void this.reconnect();
+		}
+	}
+
+	/**
+	 * Supervised reconnect with exponential backoff. Stops the existing bot
+	 * (releasing the long-poll slot server-side), waits briefly, then
+	 * launches a new instance. On failure, schedules the next attempt with
+	 * doubled backoff up to RECONNECT_BACKOFF_CAP_MS.
+	 *
+	 * Idempotent — only one reconnect runs at a time.
+	 */
+	private async reconnect(): Promise<void> {
+		if (this.isReconnecting || this.shutdownRequested) return;
+		this.isReconnecting = true;
+		this.stopHealthCheck();
+
+		try {
+			// Tear down the dead bot. Failures here are expected and ignored —
+			// the connection is already broken; we just need the slot freed.
+			try {
+				this.bot?.stop();
+			} catch {
+				// no-op
+			}
+			this.bot = null;
+			this.connectionState = "disconnected";
+
+			// Brief delay so Telegram's server-side polling slot releases
+			// before we try to claim it again.
+			await new Promise((resolve) => setTimeout(resolve, TelegramChannel.RECONNECT_STOP_DELAY_MS));
+
+			if (this.shutdownRequested) return;
+
+			this.connectionState = "connecting";
+			const { Telegraf } = await import("telegraf");
+			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
+			this.registerHandlers();
+			await this.bot.launch();
+			this.connectionState = "connected";
+			this.reconnectAttempts = 0;
+			this.startHealthCheck();
+			console.log("[telegram] Reconnected successfully");
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.reconnectAttempts++;
+			const backoffMs = Math.min(
+				TelegramChannel.RECONNECT_BACKOFF_BASE_MS * 2 ** (this.reconnectAttempts - 1),
+				TelegramChannel.RECONNECT_BACKOFF_CAP_MS,
+			);
+			console.warn(
+				`[telegram] Reconnect attempt ${this.reconnectAttempts} failed: ${msg}; ` +
+					`retrying in ${backoffMs}ms`,
+			);
+			this.connectionState = "error";
+			// Schedule the next attempt without holding isReconnecting across
+			// the timer — the recursive call will re-acquire it.
+			setTimeout(() => {
+				this.isReconnecting = false;
+				if (!this.shutdownRequested) void this.reconnect();
+			}, backoffMs);
+			return;
+		} finally {
+			// Only release the lock on success path; the error path's
+			// setTimeout releases it itself before the recursive call.
+			if (this.connectionState === "connected") {
+				this.isReconnecting = false;
+			}
+		}
 	}
 }
 

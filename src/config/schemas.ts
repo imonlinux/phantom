@@ -93,6 +93,11 @@ export const TelegramChannelConfigSchema = z.object({
 	// Has no effect in 1:1 DMs (no admin role exists). Defaults to false
 	// since Phantom Telegram's primary use case is 1:1.
 	enable_message_reactions: z.boolean().default(false),
+	// P3: Telegram numeric user IDs authorized to interact with the bot.
+	// Empty array (default) means no access control — backwards compatible.
+	// Find your ID by sending any message to @userinfobot on Telegram.
+	// Use the numeric ID, not your @username.
+	owner_user_ids: z.array(z.string()).default([]),
 });
 
 export const EmailChannelConfigSchema = z.object({

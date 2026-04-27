@@ -333,6 +333,7 @@ async function main(): Promise<void> {
 		telegramChannel = new TelegramChannel({
 			botToken: channelsConfig.telegram.bot_token,
 			enableMessageReactions: channelsConfig.telegram.enable_message_reactions,
+			ownerUserIds: channelsConfig.telegram.owner_user_ids,
 		});
 		router.register(telegramChannel);
 		console.log("[phantom] Telegram channel registered");

@@ -55,12 +55,12 @@ type TelegrafContext = {
 	message?: {
 		text?: string;
 		from?: { id: number; first_name?: string; username?: string };
-		chat: { id: number };
+		chat: { id: number; type?: "private" | "group" | "supergroup" | "channel" };
 		message_id: number;
 	};
 	reply: (text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
 	telegram: TelegramApi;
-	chat?: { id: number };
+	chat?: { id: number; type?: "private" | "group" | "supergroup" | "channel" };
 	from?: { id: number; first_name?: string; username?: string };
 	match?: RegExpMatchArray;
 	answerCbQuery?: (text?: string) => Promise<void>;
@@ -70,6 +70,11 @@ type TelegrafContext = {
 export type TelegramChannelConfig = {
 	botToken: string;
 	enableMessageReactions?: boolean;
+	/**
+	 * P3: List of Telegram numeric user IDs (as strings) authorized to
+	 * interact with the bot. Empty array (default) means no restrictions.
+	 */
+	ownerUserIds?: string[];
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -77,6 +82,12 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 // Telegram's hard message length limit. Phase 5 will add proper splitting;
 // P2.2 falls back to a fresh send when the final response exceeds this.
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
+// P3: Rejection reply sent to non-owners in DMs. First message gets the
+// explanation, subsequent ones are silently dropped (tracked via rejectedUsers).
+const REJECTION_REPLY =
+	"Hi! I'm Phantom, a personal AI co-worker. I can only respond to my owner. " +
+	"<https://github.com/ghostwright/phantom>";
 
 export class TelegramChannel implements Channel {
 	readonly id = "telegram";
@@ -106,6 +117,15 @@ export class TelegramChannel implements Channel {
 	// REACTION_INVALID for a chat, that chat is added here and subsequent
 	// reaction calls become no-ops for the rest of the session. Logged once.
 	private reactionDisabledChats = new Set<number>();
+
+	// P3: Users who have been DM-rejected at least once. We track them so
+	// we don't send the rejection reply repeatedly — first message gets the
+	// explanation, subsequent ones are silently dropped.
+	//
+	// Unbounded by design — for a personal bot in DMs this never grows
+	// meaningfully. If we ever see runaway growth in the wild, swap for an
+	// LRU. Until then, simpler is better.
+	private rejectedUsers = new Set<string>();
 
 	// Connection supervision (interim fix; Phase 8 webhook mode is the real
 	// solution). Long-polling can silently drop without Telegraf surfacing the
@@ -235,6 +255,12 @@ export class TelegramChannel implements Channel {
 			await this.bot.telegram.getMe();
 
 			this.connectionState = "connected";
+			const ownerCount = this.config.ownerUserIds?.length ?? 0;
+			if (ownerCount > 0) {
+				console.log(`[telegram] Access control active: ${ownerCount} owner ID(s) configured`);
+			} else {
+				console.log("[telegram] No access control configured — all users can interact with the bot");
+			}
 			this.reconnectAttempts = 0;
 			this.startHealthCheck();
 			console.log("[telegram] Bot connected via long polling");
@@ -537,6 +563,35 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
+	 * P3: Check if a sender is in the configured owner list. Empty list
+	 * means "no restrictions" (allow everyone) — the default for backwards
+	 * compatibility with deployments that don't set ownerUserIds.
+	 */
+	private isOwner(senderId: string): boolean {
+		const owners = this.config.ownerUserIds ?? [];
+		if (owners.length === 0) return true;
+		return owners.includes(senderId);
+	}
+
+	/**
+	 * P3: Decide what to do with a non-owner's interaction.
+	 * - DM, first time: send rejection reply, mark as rejected
+	 * - DM, already rejected: silent ignore
+	 * - Group/supergroup/channel: silent ignore (no rejection in shared rooms)
+	 */
+	private resolveAccess(
+		senderId: string,
+		chatType: "private" | "group" | "supergroup" | "channel" | undefined,
+	): "allowed" | "reject_dm" | "ignore" {
+		if (this.isOwner(senderId)) return "allowed";
+		if (chatType === "group" || chatType === "supergroup" || chatType === "channel") {
+			return "ignore";
+		}
+		if (this.rejectedUsers.has(senderId)) return "ignore";
+		return "reject_dm";
+	}
+
+	/**
 	 * P2.4: Map a Telegraf reaction-update context to a FeedbackSignal and
 	 * emit it. Best-effort — silently returns if the context is missing
 	 * required fields. Telegram filters out reactions set by the bot itself
@@ -561,6 +616,11 @@ export class TelegramChannel implements Channel {
 			// signal. Silently drop.
 			return;
 		}
+
+		// P3: gate reactions by owner. Non-owners' reactions don't produce
+		// feedback signals — they shouldn't influence the evolution engine
+		// on the owner's behalf.
+		if (!this.isOwner(String(mr.user.id))) return;
 
 		emitFeedback({
 			type,
@@ -596,14 +656,31 @@ export class TelegramChannel implements Channel {
 			if (text.startsWith("/")) return;
 
 			const chatId = ctx.message.chat.id;
+			const chatType = ctx.message.chat.type;
 			const from = ctx.message.from;
+			const senderId = String(from?.id ?? "unknown");
+
+			// P3: access control gate
+			const access = this.resolveAccess(senderId, chatType);
+			if (access === "ignore") return;
+			if (access === "reject_dm") {
+				this.rejectedUsers.add(senderId);
+				try {
+					await this.bot?.telegram.sendMessage(chatId, REJECTION_REPLY);
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.warn(`[telegram] Failed to send rejection reply: ${msg}`);
+				}
+				return;
+			}
+
 			const conversationId = `telegram:${chatId}`;
 
 			const inbound: InboundMessage = {
 				id: String(ctx.message.message_id),
 				channelId: this.id,
 				conversationId,
-				senderId: String(from?.id ?? "unknown"),
+				senderId,
 				senderName: from?.first_name ?? from?.username,
 				text,
 				timestamp: new Date(),
@@ -626,9 +703,10 @@ export class TelegramChannel implements Channel {
 		// (action-button hints from P2.5, etc.) continue to route as
 		// inbound messages.
 		this.bot.action(/^phantom:feedback:(positive|negative|partial)$/, async (ctx) => {
-			if (ctx.answerCbQuery) {
-				await ctx.answerCbQuery();
-			}
+			if (ctx.answerCbQuery) await ctx.answerCbQuery();
+
+			const senderId = String(ctx.from?.id ?? "unknown");
+			if (!this.isOwner(senderId)) return; // silent drop, no rejection in callback context
 
 			const data = ctx.callbackQuery?.data;
 			const type = data ? parseFeedbackAction(data) : null;
@@ -638,14 +716,13 @@ export class TelegramChannel implements Channel {
 			const messageId = ctx.callbackQuery?.message?.message_id;
 			if (chatId === undefined || messageId === undefined) return;
 
-			const userId = String(ctx.from?.id ?? "unknown");
 			const conversationId = `telegram:${chatId}`;
 
 			emitFeedback({
 				type,
 				conversationId,
 				messageTs: String(messageId),
-				userId,
+				userId: senderId,
 				source: "button",
 				timestamp: Date.now(),
 			});
@@ -669,6 +746,9 @@ export class TelegramChannel implements Channel {
 			// for those, but we double-check for safety against framework changes.
 			if (data.startsWith("feedback:")) return;
 
+			const senderId = String(ctx.from?.id ?? "unknown");
+			if (!this.isOwner(senderId)) return;
+
 			const chatId = ctx.callbackQuery?.message?.chat.id;
 			if (!chatId) return;
 
@@ -679,7 +759,7 @@ export class TelegramChannel implements Channel {
 				id: `cb_${Date.now()}`,
 				channelId: this.id,
 				conversationId,
-				senderId: String(from?.id ?? "unknown"),
+				senderId,
 				senderName: from?.first_name ?? from?.username,
 				text: data,
 				timestamp: new Date(),

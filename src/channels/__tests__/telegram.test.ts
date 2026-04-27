@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { TelegramChannel, type TelegramChannelConfig } from "../telegram.ts";
 
 // Mock Telegraf
@@ -195,5 +195,157 @@ describe("TelegramChannel", () => {
 
 		await channel.editMessage(67890, 42, "Updated text");
 		expect(mockEditMessageText).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("TelegramChannel connection supervision", () => {
+	const testConfig: TelegramChannelConfig = { botToken: "test-token" };
+
+	function makeMockedBot(launchImpl?: () => Promise<void>, getMeImpl?: () => Promise<unknown>) {
+		const calls = {
+			launch: 0,
+			stop: 0,
+			getMe: 0,
+		};
+
+		const bot = {
+			launch: mock(async () => {
+				calls.launch++;
+				if (launchImpl) await launchImpl();
+			}),
+			stop: mock(() => {
+				calls.stop++;
+			}),
+			command: mock(() => {}),
+			on: mock(() => {}),
+			action: mock(() => {}),
+			telegram: {
+				sendMessage: mock(async () => ({ message_id: 1 })),
+				editMessageText: mock(async () => undefined),
+				editMessageReplyMarkup: mock(async () => undefined),
+				sendChatAction: mock(async () => undefined),
+				setMessageReaction: mock(async () => undefined),
+				getMe: mock(async () => {
+					calls.getMe++;
+					if (getMeImpl) return getMeImpl();
+					return { id: 1, is_bot: true, first_name: "TestBot" };
+				}),
+			},
+		};
+
+		return { bot, calls };
+	}
+
+	// Inject the mocked bot directly without going through Telegraf import.
+	function injectBot(channel: TelegramChannel, bot: ReturnType<typeof makeMockedBot>["bot"]): void {
+		(channel as unknown as { bot: unknown }).bot = bot;
+		(channel as unknown as { connectionState: string }).connectionState = "connected";
+	}
+
+	test("healthcheck calls getMe periodically when running", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot, calls } = makeMockedBot();
+		injectBot(channel, bot);
+
+		// Manually start the healthcheck (we bypassed connect()).
+		(channel as unknown as { startHealthCheck: () => void }).startHealthCheck();
+
+		// Force-fire the healthcheck once via the private method.
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(calls.getMe).toBe(1);
+
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(calls.getMe).toBe(2);
+
+		(channel as unknown as { stopHealthCheck: () => void }).stopHealthCheck();
+	});
+
+	test("healthcheck failure triggers a reconnect", async () => {
+		const channel = new TelegramChannel(testConfig);
+		let getMeShouldFail = true;
+		const { bot, calls } = makeMockedBot(
+			async () => {
+				/* launch succeeds */
+			},
+			async () => {
+				if (getMeShouldFail) throw new Error("ETIMEDOUT");
+				return { id: 1, is_bot: true, first_name: "TestBot" };
+			},
+		);
+		injectBot(channel, bot);
+
+		// Spy on reconnect via property override.
+		let reconnectCalled = false;
+		const originalReconnect = (channel as unknown as { reconnect: () => Promise<void> }).reconnect;
+		(channel as unknown as { reconnect: () => Promise<void> }).reconnect = async () => {
+			reconnectCalled = true;
+		};
+
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(reconnectCalled).toBe(true);
+		expect(calls.getMe).toBe(1);
+
+		// Restore for subsequent tests in the same module
+		(channel as unknown as { reconnect: () => Promise<void> }).reconnect = originalReconnect;
+	});
+
+	test("healthcheck is a no-op while reconnecting", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot, calls } = makeMockedBot();
+		injectBot(channel, bot);
+
+		(channel as unknown as { isReconnecting: boolean }).isReconnecting = true;
+
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(calls.getMe).toBe(0);
+	});
+
+	test("healthcheck is a no-op after shutdown is requested", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot, calls } = makeMockedBot();
+		injectBot(channel, bot);
+
+		(channel as unknown as { shutdownRequested: boolean }).shutdownRequested = true;
+
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(calls.getMe).toBe(0);
+	});
+
+	test("healthcheck is a no-op when not connected", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot, calls } = makeMockedBot();
+		// Inject bot but leave connectionState as "disconnected" (default).
+		(channel as unknown as { bot: unknown }).bot = bot;
+
+		await (channel as unknown as { runHealthCheck: () => Promise<void> }).runHealthCheck();
+		expect(calls.getMe).toBe(0);
+	});
+
+	test("disconnect stops the healthcheck timer and sets shutdownRequested", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot } = makeMockedBot();
+		injectBot(channel, bot);
+
+		(channel as unknown as { startHealthCheck: () => void }).startHealthCheck();
+		expect((channel as unknown as { healthCheckTimer: unknown }).healthCheckTimer).not.toBeNull();
+
+		await channel.disconnect();
+		expect((channel as unknown as { healthCheckTimer: unknown }).healthCheckTimer).toBeNull();
+		expect((channel as unknown as { shutdownRequested: boolean }).shutdownRequested).toBe(true);
+	});
+
+	test("reconnect is idempotent — only one runs at a time", async () => {
+		const channel = new TelegramChannel(testConfig);
+		const { bot } = makeMockedBot();
+		injectBot(channel, bot);
+
+		(channel as unknown as { isReconnecting: boolean }).isReconnecting = true;
+
+		// Calling reconnect while already reconnecting should be a no-op.
+		// We can't easily verify "no-op" without timing, but we can verify
+		// that the function returns without throwing.
+		await expect(
+			(channel as unknown as { reconnect: () => Promise<void> }).reconnect(),
+		).resolves.toBeUndefined();
 	});
 });

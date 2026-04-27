@@ -6,6 +6,7 @@ import {
 	buildActionBlocks,
 	buildFeedbackAckBlocks,
 	buildFeedbackBlocks,
+	buildFeedbackInlineKeyboard,
 	emitFeedback,
 	parseFeedbackAction,
 	setFeedbackHandler,
@@ -21,8 +22,7 @@ describe("buildFeedbackBlocks", () => {
 
 	test("has three feedback buttons", () => {
 		const blocks = buildFeedbackBlocks("msg_123");
-		const actionsBlock = blocks[1];
-		expect(actionsBlock.elements?.length).toBe(3);
+		expect(blocks[1].elements?.length).toBe(3);
 	});
 
 	test("includes message id in block_id", () => {
@@ -37,6 +37,44 @@ describe("buildFeedbackBlocks", () => {
 		expect(actionIds).toContain("phantom:feedback:positive");
 		expect(actionIds).toContain("phantom:feedback:negative");
 		expect(actionIds).toContain("phantom:feedback:partial");
+	});
+});
+
+// P2.3: new tests for the Telegram inline-keyboard helper
+describe("buildFeedbackInlineKeyboard (P2.3)", () => {
+	test("returns a single row of three buttons", () => {
+		const keyboard = buildFeedbackInlineKeyboard();
+		expect(keyboard.length).toBe(1);
+		expect(keyboard[0].length).toBe(3);
+	});
+
+	test("buttons have callback_data matching Slack action_ids", () => {
+		const keyboard = buildFeedbackInlineKeyboard();
+		const callbackData = keyboard[0].map((b) => b.callback_data);
+		expect(callbackData).toContain("phantom:feedback:positive");
+		expect(callbackData).toContain("phantom:feedback:negative");
+		expect(callbackData).toContain("phantom:feedback:partial");
+	});
+
+	test("button labels include emoji prefixes", () => {
+		const keyboard = buildFeedbackInlineKeyboard();
+		const labels = keyboard[0].map((b) => b.text);
+		expect(labels.some((l) => l.includes("👍"))).toBe(true);
+		expect(labels.some((l) => l.includes("👎"))).toBe(true);
+		expect(labels.some((l) => l.includes("🤔"))).toBe(true);
+	});
+
+	test("callback_data fits within Telegram's 64-byte limit", () => {
+		const keyboard = buildFeedbackInlineKeyboard();
+		for (const button of keyboard[0]) {
+			expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+		}
+	});
+
+	test("parseFeedbackAction works on the keyboard's callback_data", () => {
+		const keyboard = buildFeedbackInlineKeyboard();
+		const types = keyboard[0].map((b) => parseFeedbackAction(b.callback_data));
+		expect(types).toEqual(["positive", "negative", "partial"]);
 	});
 });
 
@@ -152,7 +190,6 @@ describe("feedback handler", () => {
 	});
 
 	test("emitFeedback does nothing without handler", () => {
-		// Should not throw
 		emitFeedback({
 			type: "negative",
 			conversationId: "test",

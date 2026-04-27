@@ -483,54 +483,51 @@ export class TelegramChannel implements Channel {
 		this.isReconnecting = true;
 		this.stopHealthCheck();
 
-		try {
-			// Tear down the dead bot. Use the timeout version to avoid
-			// hanging shutdown if the poll loop is wedged.
+		// Tear down any existing bot. Failures here are expected — the
+		// connection is already broken or never started; we just need the
+		// slot freed (best-effort) before re-launching.
+		if (this.bot) {
 			await this.stopBotWithTimeout();
 			this.bot = null;
-			this.connectionState = "disconnected";
-
-			// Brief delay so Telegram's server-side polling slot releases
-			// before we try to claim it again.
-			await new Promise((resolve) => setTimeout(resolve, TelegramChannel.RECONNECT_STOP_DELAY_MS));
-
-			if (this.shutdownRequested) return;
-
-			// Try to launch. If it fails, the error handler will schedule
-			// the next reconnect attempt with exponential backoff.
-			const launched = await this.tryLaunch();
-			if (launched) {
-				console.log("[telegram] Reconnected successfully");
-			} else {
-				// tryLaunch already set state to "error", so we just need to
-				// schedule the next reconnect.
-				throw new Error("tryLaunch failed");
-			}
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			this.reconnectAttempts++;
-			const backoffMs = Math.min(
-				TelegramChannel.RECONNECT_BACKOFF_BASE_MS * 2 ** (this.reconnectAttempts - 1),
-				TelegramChannel.RECONNECT_BACKOFF_CAP_MS,
-			);
-			console.warn(
-				`[telegram] Reconnect attempt ${this.reconnectAttempts} failed: ${msg}; ` +
-					`retrying in ${backoffMs}ms`,
-			);
-			// Schedule the next attempt without holding isReconnecting across
-			// the timer — the recursive call will re-acquire it.
-			setTimeout(() => {
-				this.isReconnecting = false;
-				if (!this.shutdownRequested) void this.reconnect();
-			}, backoffMs);
-			return;
-		} finally {
-			// Only release the lock on success path; the error path's
-			// setTimeout releases it itself before the recursive call.
-			if (this.connectionState === "connected") {
-				this.isReconnecting = false;
-			}
 		}
+		this.connectionState = "disconnected";
+
+		// Brief delay so Telegram's server-side polling slot releases
+		// before we try to claim it again. On the cold-start case where
+		// the slot is held by a previous Docker container, this delay
+		// is insufficient on its own — but the launch will retry through
+		// the backoff loop until the slot becomes available (~90s after
+		// the previous holder's last poll).
+		await new Promise((resolve) => setTimeout(resolve, TelegramChannel.RECONNECT_STOP_DELAY_MS));
+
+		if (this.shutdownRequested) {
+			this.isReconnecting = false;
+			return;
+		}
+
+		const launched = await this.tryLaunch();
+		if (launched) {
+			this.isReconnecting = false;
+			console.log("[telegram] Reconnected successfully");
+			return;
+		}
+
+		// Launch failed — schedule the next attempt with exponential backoff.
+		this.reconnectAttempts++;
+		const backoffMs = Math.min(
+			TelegramChannel.RECONNECT_BACKOFF_BASE_MS * 2 ** (this.reconnectAttempts - 1),
+			TelegramChannel.RECONNECT_BACKOFF_CAP_MS,
+		);
+		console.warn(
+			`[telegram] Reconnect attempt ${this.reconnectAttempts} failed; ` +
+				`retrying in ${backoffMs}ms`,
+		);
+		// Release the lock before scheduling, so the timer's recursive
+		// call can re-acquire it.
+		this.isReconnecting = false;
+		setTimeout(() => {
+			if (!this.shutdownRequested) void this.reconnect();
+		}, backoffMs);
 	}
 }
 

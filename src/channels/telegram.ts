@@ -265,8 +265,90 @@ export class TelegramChannel implements Channel {
 	}
 
 	private registerHandlers(): void {
-		// (kept thin in this snapshot; the existing implementation in the repo
-		// stays as-is. The new behaviors land via the interaction adapter.)
+		if (!this.bot) return;
+
+		this.bot.command("start", async (ctx) => {
+			await ctx.reply("Hello! I'm Phantom, your AI co-worker. Send me a message to get started.");
+		});
+
+		this.bot.command("status", async (ctx) => {
+			await ctx.reply("Phantom is running and ready to help.");
+		});
+
+		this.bot.command("help", async (ctx) => {
+			await ctx.reply(
+				"Send me any message and I'll help you out.\n\nCommands:\n/start - Introduction\n/status - Check status\n/help - Show this message",
+			);
+		});
+
+		this.bot.on("text", async (ctx) => {
+			if (!this.messageHandler || !ctx.message?.text) return;
+
+			const text = ctx.message.text;
+			if (text.startsWith("/")) return;
+
+			const chatId = ctx.message.chat.id;
+			const from = ctx.message.from;
+			const conversationId = `telegram:${chatId}`;
+
+			const inbound: InboundMessage = {
+				id: String(ctx.message.message_id),
+				channelId: this.id,
+				conversationId,
+				senderId: String(from?.id ?? "unknown"),
+				senderName: from?.first_name ?? from?.username,
+				text,
+				timestamp: new Date(),
+				metadata: {
+					telegramChatId: chatId,
+					telegramMessageId: ctx.message.message_id,
+				},
+			};
+
+			try {
+				await this.messageHandler(inbound);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Error handling message: ${msg}`);
+			}
+		});
+
+		this.bot.action(/^phantom:(.+)$/, async (ctx) => {
+			if (ctx.answerCbQuery) {
+				await ctx.answerCbQuery();
+			}
+
+			const data = ctx.match?.[1];
+			if (!data || !this.messageHandler) return;
+
+			const chatId = ctx.callbackQuery?.message?.chat.id;
+			if (!chatId) return;
+
+			const from = ctx.from;
+			const conversationId = `telegram:${chatId}`;
+
+			const inbound: InboundMessage = {
+				id: `cb_${Date.now()}`,
+				channelId: this.id,
+				conversationId,
+				senderId: String(from?.id ?? "unknown"),
+				senderName: from?.first_name ?? from?.username,
+				text: data,
+				timestamp: new Date(),
+				metadata: {
+					telegramChatId: chatId,
+					source: "callback_query",
+					callbackData: data,
+				},
+			};
+
+			try {
+				await this.messageHandler(inbound);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Error handling callback: ${msg}`);
+			}
+		});
 	}
 }
 

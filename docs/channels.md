@@ -194,9 +194,9 @@ channels:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     owner_user_ids:
-      - ${TELEGRAM_OWNER_USER_ID}
-    # - ${TELEGRAM_OWNER_USER_ID2}   # uncomment when adding a second owner
-    # - ${TELEGRAM_OWNER_USER_ID3}
+      - "${TELEGRAM_OWNER_USER_ID}"
+    # - "${TELEGRAM_OWNER_USER_ID2}"   # uncomment when adding a second owner
+    # - "${TELEGRAM_OWNER_USER_ID3}"
 ```
 
 Behavior with access control enabled:

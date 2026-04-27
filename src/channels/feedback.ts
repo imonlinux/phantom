@@ -71,7 +71,6 @@ export function buildFeedbackBlocks(messageId: string): SlackBlock[] {
 
 /**
  * Build the updated blocks after a user clicks a feedback button.
- * Replaces the buttons with a "Thanks" acknowledgment.
  */
 export function buildFeedbackAckBlocks(choice: string): SlackBlock[] {
 	const labels: Record<string, string> = {
@@ -91,14 +90,8 @@ export function buildFeedbackAckBlocks(choice: string): SlackBlock[] {
 	];
 }
 
-/**
- * Build Slack Block Kit action buttons from agent response hints.
- * The agent's response can include structured button hints that
- * the channel renders. The agent decides; TypeScript renders.
- */
 export function buildActionBlocks(actions: ActionHint[]): SlackBlock[] {
 	if (actions.length === 0) return [];
-
 	const elements = actions.slice(0, 5).map((action, i) => ({
 		type: "button" as const,
 		text: { type: "plain_text" as const, text: action.label.slice(0, 75) },
@@ -106,7 +99,6 @@ export function buildActionBlocks(actions: ActionHint[]): SlackBlock[] {
 		value: JSON.stringify({ label: action.label, payload: action.payload }),
 		...(action.style ? { style: action.style } : {}),
 	}));
-
 	return [
 		{
 			type: "actions",
@@ -116,9 +108,6 @@ export function buildActionBlocks(actions: ActionHint[]): SlackBlock[] {
 	];
 }
 
-/**
- * Parse the feedback action_id to determine the signal type.
- */
 export function parseFeedbackAction(actionId: string): "positive" | "negative" | "partial" | null {
 	if (!actionId.startsWith(FEEDBACK_ACTION_PREFIX)) return null;
 	const type = actionId.slice(FEEDBACK_ACTION_PREFIX.length);
@@ -132,13 +121,39 @@ export const FEEDBACK_ACTION_IDS = [
 	`${FEEDBACK_ACTION_PREFIX}partial`,
 ];
 
+/**
+ * P2.3: Telegram inline keyboard for feedback buttons.
+ *
+ * Returns the structure passed as `reply_markup.inline_keyboard` to
+ * Telegram's sendMessage / editMessageReplyMarkup. The callback_data
+ * matches Slack's action_id format so parseFeedbackAction works on both
+ * channels uniformly.
+ *
+ * Telegram callback_data has a hard 64-byte limit; the message context
+ * (chat_id, message_id) comes from the callback_query payload, so we
+ * don't need to encode it in the data string itself.
+ */
+export type TelegramInlineKeyboardButton = {
+	text: string;
+	callback_data: string;
+};
+
+export function buildFeedbackInlineKeyboard(): TelegramInlineKeyboardButton[][] {
+	return [
+		[
+			{ text: "👍 Helpful", callback_data: `${FEEDBACK_ACTION_PREFIX}positive` },
+			{ text: "👎 Not helpful", callback_data: `${FEEDBACK_ACTION_PREFIX}negative` },
+			{ text: "🤔 Could be better", callback_data: `${FEEDBACK_ACTION_PREFIX}partial` },
+		],
+	];
+}
+
 export type ActionHint = {
 	label: string;
 	payload?: string;
 	style?: "primary" | "danger";
 };
 
-// Slack Block Kit types (minimal subset)
 export type SlackBlock = {
 	type: string;
 	block_id?: string;

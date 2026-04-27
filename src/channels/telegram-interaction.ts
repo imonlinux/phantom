@@ -2,18 +2,12 @@
  * Telegram channel interaction adapter.
  *
  * Phase 2.1: status reactions via setMessageReaction (TELEGRAM_EMOJIS map).
- * Phase 2.2 (this file): progressStream wired to postProgressMessage /
- *   updateProgressMessage / finishProgressMessage. deliverResponse claims
- *   the response by replacing the progress message with the final text.
- *
- * The progress message and the status reactions are complementary and run
- * in parallel: the user's message gets the reaction state machine
- * (👀 → 🤔 → 👨‍💻 → 👌), and the bot posts a separate "Working on it…"
- * message that updates with activity (`> Reading /x.ts`, `> Running: ...`)
- * and finally edits in place to show the response. Same UX as Slack.
- *
- * Phases 2.3–2.5 will populate inline-keyboard feedback buttons and
- * action-button hint rendering in deliverResponse.
+ * Phase 2.2: progressStream wired to postProgressMessage / updateProgressMessage /
+ *   finishProgressMessage.
+ * Phase 2.3 (this file): finishProgressMessage now receives attachFeedback=true,
+ *   which appends inline-keyboard feedback buttons (👍 / 👎 / 🤔) to the final
+ *   response. The Telegram channel's bot.action handler intercepts those button
+ *   clicks and routes them to emitFeedback() — see telegram.ts.
  */
 
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
@@ -57,8 +51,6 @@ export function createTelegramInteractionFactory(
 		const tc = telegramChannel;
 		const cid = chatId;
 
-		// P2.1: status reactions on the user's message. Skipped if messageId
-		// is missing (older metadata, callback queries that don't carry it).
 		let statusReactions: StatusReactionController | undefined;
 		if (messageId !== undefined) {
 			const mid = messageId;
@@ -67,11 +59,8 @@ export function createTelegramInteractionFactory(
 					addReaction: async (emoji) => {
 						await tc.setReaction(cid, mid, emoji);
 					},
-					// Telegram's setMessageReaction replaces atomically, so the
-					// controller's "remove old then add new" pattern collapses
-					// to a single call. The remove side is a no-op.
 					removeReaction: async (_emoji) => {
-						// no-op
+						// no-op: setMessageReaction replaces atomically
 					},
 				},
 				emojis: TELEGRAM_EMOJIS,
@@ -84,15 +73,9 @@ export function createTelegramInteractionFactory(
 			statusReactions.setQueued();
 		}
 
-		// P2.2: progress stream — posts "Working on it…" and updates with
-		// tool activity, then replaces with the final response on finish.
-		// Reuses progress-stream.ts (same module Slack uses); the THROTTLE_MS
-		// of 1000ms in that module aligns with Telegram's per-chat rate limit.
 		const progressStream: ProgressStream = createProgressStream({
 			adapter: {
 				postMessage: async (_text) => {
-					// Ignore the text param — postProgressMessage hardcodes
-					// "Working on it..." which matches the controller's default.
 					const id = await tc.postProgressMessage(cid);
 					return id !== null ? String(id) : "";
 				},
@@ -105,16 +88,12 @@ export function createTelegramInteractionFactory(
 			onFinish: async (msgId, text) => {
 				const numericId = Number(msgId);
 				if (Number.isNaN(numericId)) {
-					// postProgressMessage failed earlier and returned "". The
-					// controller still calls finish with the final text — fall
-					// back to a fresh send. We don't have a great way to do
-					// this from inside onFinish since we don't get the channel
-					// directly; rely on the deliverResponse fallback chain
-					// below to handle it. For now, log and skip.
-					console.warn("[telegram] Progress message id missing at finish; deliverResponse will fall back");
+					console.warn("[telegram] Progress message id missing at finish");
 					return;
 				}
-				await tc.finishProgressMessage(cid, numericId, text);
+				// P2.3: attach feedback buttons to the final response.
+				// Always attached (even on errors — the user can flag bad errors).
+				await tc.finishProgressMessage(cid, numericId, text, true);
 			},
 			onError: (err) => {
 				const errMsg = err instanceof Error ? err.message : String(err);
@@ -138,7 +117,6 @@ export function createTelegramInteractionFactory(
 						break;
 					case "tool_use":
 						statusReactions?.setTool(event.tool);
-						// P2.2: append activity to the progress stream.
 						const summary = formatToolActivity(event.tool, event.input);
 						progressStream.addToolActivity(event.tool, summary);
 						break;
@@ -152,26 +130,12 @@ export function createTelegramInteractionFactory(
 				tc.stopTyping(cid);
 			},
 
-			/**
-			 * P2.2: claim the response by finishing the progress stream.
-			 * On success (progressStream.finish completes), the orchestration
-			 * skips router.send entirely. If we couldn't post a progress
-			 * message earlier (postProgressMessage returned null), the
-			 * progress stream's getMessageId() returns null and finish
-			 * silently no-ops — we fall through and let router.send deliver
-			 * the response as a fresh message.
-			 */
 			async deliverResponse({ text }): Promise<boolean> {
-				// If the progress message was posted successfully, finish
-				// claims delivery. progress-stream.finish() calls our
-				// onFinish hook which calls finishProgressMessage().
 				const progressMessageId = progressStream.getMessageId();
 				if (progressMessageId) {
 					await progressStream.finish(text);
 					return true;
 				}
-				// Progress message couldn't be posted (network blip during
-				// onTurnStart, e.g.). Let router.send handle delivery.
 				return false;
 			},
 

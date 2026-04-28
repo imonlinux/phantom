@@ -12,6 +12,7 @@
 
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
+import { escapeMarkdownV2 } from "./markdown-v2.ts";
 
 type TelegrafBot = {
 	launch: (opts?: { allowedUpdates?: string[] }) => Promise<void>;
@@ -899,25 +900,4 @@ export class TelegramChannel implements Channel {
 function parseTelegramConversationId(conversationId: string): number {
 	const chatId = conversationId.split(":")[1];
 	return Number(chatId);
-}
-
-function escapeMarkdownV2(text: string): string {
-	const codeBlocks: string[] = [];
-	let result = text.replace(/```[\s\S]*?```/g, (match) => {
-		codeBlocks.push(match);
-		return `\x00CB${codeBlocks.length - 1}\x00`;
-	});
-	const inlineCodes: string[] = [];
-	result = result.replace(/`[^`]+`/g, (match) => {
-		inlineCodes.push(match);
-		return `\x00IC${inlineCodes.length - 1}\x00`;
-	});
-	result = result.replace(/([_*\[\]()~>#+\-=|{}.!\\])/g, "\\$1");
-	for (let i = 0; i < inlineCodes.length; i++) {
-		result = result.replace(`\x00IC${i}\x00`, inlineCodes[i]);
-	}
-	for (let i = 0; i < codeBlocks.length; i++) {
-		result = result.replace(`\x00CB${i}\x00`, codeBlocks[i]);
-	}
-	return result;
 }

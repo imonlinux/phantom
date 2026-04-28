@@ -99,7 +99,7 @@ export class SessionStore {
               AND conversation_id LIKE ? || '%'
               AND status = 'active'
               AND datetime(last_active_at) > datetime(?)
-            ORDER BY last_active_at DESC
+            ORDER BY datetime(last_active_at) DESC
             LIMIT 1
         `).get(channelId, conversationPrefix, cutoff) as Session | null;
 

@@ -94,14 +94,14 @@ export class SessionStore {
 		const cutoff = cutoffDate.toISOString();
 
 		const session = this.db.query(`
-			SELECT * FROM sessions
-			WHERE channel_id = ?
-			  AND conversation_id LIKE ? || '%'
-			  AND status = 'active'
-			  AND last_active_at > ?
-			ORDER BY last_active_at DESC
-			LIMIT 1
-		`).get(channelId, conversationPrefix, cutoff) as Session | null;
+            SELECT * FROM sessions
+            WHERE channel_id = ?
+              AND conversation_id LIKE ? || '%'
+              AND status = 'active'
+              AND datetime(last_active_at) > datetime(?)
+            ORDER BY last_active_at DESC
+            LIMIT 1
+        `).get(channelId, conversationPrefix, cutoff) as Session | null;
 
 		return session;
 	}

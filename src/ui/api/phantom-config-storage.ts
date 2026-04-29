@@ -161,6 +161,7 @@ export function projectToUi(loaded: LoadedConfig): PhantomConfigForUi {
 	const channels = {
 		slack: { enabled: Boolean((c.slack as Record<string, unknown> | undefined)?.enabled) },
 		telegram: { enabled: Boolean((c.telegram as Record<string, unknown> | undefined)?.enabled) },
+		nextcloud: { enabled: Boolean((c.nextcloud as Record<string, unknown> | undefined)?.enabled) },
 		email: { enabled: Boolean((c.email as Record<string, unknown> | undefined)?.enabled) },
 		webhook: { enabled: Boolean((c.webhook as Record<string, unknown> | undefined)?.enabled) },
 	};

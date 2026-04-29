@@ -93,9 +93,7 @@ Long-polling is the simplest mode and works without a public URL.
 
 ```bash
 TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-TELEGRAM_OWNER_USER_ID="123456789"
-#TELEGRAM_OWNER_USER_ID2="192837645"
-#TELEGRAM_OWNER_USER_ID3="987654321"
+TELEGRAM_OWNER_USER_IDS="123456789,192837645,987654321"
 TELEGRAM_ENABLE_MESSAGE_REACTIONS="true"
 TELEGRAM_SEND_INTRO="true"
 ```
@@ -107,17 +105,14 @@ channels:
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
-    owner_user_ids:
-      - ${TELEGRAM_OWNER_USER_ID}
-#     - ${TELEGRAM_OWNER_USER_ID2}
-#     - ${TELEGRAM_OWNER_USER_ID3}
+    owner_user_ids: ${TELEGRAM_OWNER_USER_IDS}
     enable_message_reactions: ${TELEGRAM_ENABLE_MESSAGE_REACTIONS}
     send_intro: ${TELEGRAM_SEND_INTRO}
 ```
 
 **Configuration fields:**
 - `bot_token` - Bot token from BotFather
-- `owner_user_ids` - List of Telegram user IDs allowed to interact with the bot, remove comments for additional allowed IDs
+- `owner_user_ids` - Comma-separated list of Telegram user IDs allowed to interact with the bot
 - `enable_message_reactions` - Enable emoji status updates (default: false)
 - `send_intro` - Send proactive introduction message (default: false)
 
@@ -172,9 +167,7 @@ TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
 TELEGRAM_WEBHOOK_URL="https://phantom.example.com/telegram/webhook"
 TELEGRAM_WEBHOOK_SECRET="your_generated_secret_here"
 TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP="false"
-TELEGRAM_OWNER_USER_ID="123456789"
-#TELEGRAM_OWNER_USER_ID2="192837645"
-#TELEGRAM_OWNER_USER_ID3="987654321"
+TELEGRAM_OWNER_USER_IDS="123456789,192837645,987654321"
 TELEGRAM_ENABLE_MESSAGE_REACTIONS="true"
 TELEGRAM_SEND_INTRO="true"
 ```
@@ -188,11 +181,8 @@ channels:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     webhook_url: ${TELEGRAM_WEBHOOK_URL}
     webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
-    verify_webhook_source_ip: &{TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP}
-    owner_user_ids:
-      - ${TELEGRAM_OWNER_USER_ID}
-#     - ${TELEGRAM_OWNER_USER_ID2}
-#     - ${TELEGRAM_OWNER_USER_ID3}
+    verify_webhook_source_ip: ${TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP}
+    owner_user_ids: ${TELEGRAM_OWNER_USER_IDS}
     enable_message_reactions: ${TELEGRAM_ENABLE_MESSAGE_REACTIONS}
     send_intro: ${TELEGRAM_SEND_INTRO}
 ```
@@ -201,6 +191,9 @@ channels:
 - `webhook_url` - Public HTTPS URL where Phantom receives webhooks
 - `webhook_secret` - Random secret for HMAC verification (optional but recommended)
 - `verify_webhook_source_ip` - Verify requests come from Telegram IPs (default: false)
+- `owner_user_ids` - Comma-separated list of Telegram user IDs allowed to interact with the bot
+- `enable_message_reactions` - Enable emoji status updates (default: false)
+- `send_intro` - Send proactive introduction message (default: false)
 
 ### Step 3: Configure SSL/TLS
 
@@ -546,8 +539,7 @@ openssl rand -hex 32
 ```yaml
 channels:
   telegram:
-    owner_user_ids:
-      - 123456789  # Only this user can interact
+    owner_user_ids: "123456789,192837645,987654321"
 ```
 
 ### 4. Use HTTPS for Webhooks

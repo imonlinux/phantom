@@ -648,16 +648,20 @@ export class NextcloudChannel implements Channel {
 					// Parse response to extract message ID for progressive updates
 					try {
 						const responseData = await res.json();
+						console.log("[nextcloud] Post message response:", JSON.stringify(responseData).slice(0, 200));
 						// OCS API format: { ocs: { meta: {...}, data: {...} } }
 						// The message ID should be in ocs.data.id
 						const messageId = responseData?.ocs?.data?.id;
 						if (typeof messageId === "number" || typeof messageId === "string") {
+							console.log("[nextcloud] Extracted message ID:", messageId);
 							return { success: true, messageId: String(messageId) };
 						}
 						// Fallback: return success without message ID
+						console.log("[nextcloud] No message ID found in response");
 						return { success: true, messageId: undefined };
-					} catch {
+					} catch (parseError) {
 						// JSON parse failed, return success without message ID
+						console.log("[nextcloud] JSON parse error:", parseError);
 						return { success: true, messageId: undefined };
 					}
 				}

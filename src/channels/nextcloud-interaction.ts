@@ -104,15 +104,20 @@ export function createNextcloudInteractionFactory(
 				adapter: {
 					postMessage: async (text) => {
 						// Post initial "Working on it..." message and return real message ID
+						console.log("[nextcloud] postMessage called with:", text);
 						const result = await nc.postToNextcloud(rt, text);
+						console.log("[nextcloud] postMessage result:", result);
 						// Return the real Nextcloud message ID for editing
 						return result.messageId || "";
 					},
 					updateMessage: async (msgId, updatedText) => {
 						// Update the progress message using the editMessage API
+						console.log("[nextcloud] updateMessage called with msgId:", msgId, "text:", updatedText.slice(0, 50));
 						// Only attempt update if we have a valid message ID
 						if (msgId) {
 							await nc.editMessage(rt, msgId, updatedText);
+						} else {
+							console.log("[nextcloud] updateMessage skipped - no message ID");
 						}
 					},
 				},

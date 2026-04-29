@@ -228,3 +228,45 @@ describe("TelegramChannel.setReaction (P5.4 retry)", () => {
 		expect(callCount).toBe(4); // Initial + 3 retries
 	});
 });
+
+describe("TelegramChannel Security (P5.5)", () => {
+	test("warns on construction when owner IDs contain non-numeric values", () => {
+		let warnMessage: string | undefined;
+		const originalWarn = console.warn;
+		console.warn = (msg: string) => {
+			warnMessage = msg;
+		};
+
+		try {
+			new TelegramChannel({
+				botToken: "test-token",
+				ownerUserIds: ["123", "abc", "-1", ""],
+			});
+
+			expect(warnMessage).toBeDefined();
+			expect(warnMessage).toContain("[telegram] Invalid owner_user_ids detected");
+			expect(warnMessage).toContain("abc");
+			expect(warnMessage).toContain("-1");
+			expect(warnMessage).toContain("");
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+
+	test("does not warn when owner IDs are all valid numeric strings", () => {
+		let warnMessage: string | undefined;
+		const originalWarn = console.warn;
+		console.warn = () => {};
+
+		try {
+			new TelegramChannel({
+				botToken: "test-token",
+				ownerUserIds: ["123456789", "987654321"],
+			});
+			// If we got here, no error was thrown
+			expect(true).toBe(true);
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+});

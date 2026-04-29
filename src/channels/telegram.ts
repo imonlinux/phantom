@@ -76,6 +76,13 @@ export type TelegramChannelConfig = {
 	 * interact with the bot. Empty array (default) means no restrictions.
 	 */
 	ownerUserIds?: string[];
+	/**
+	 * P5.5: Optional custom rejection message sent to non-owners in DMs.
+	 * Defaults to Phantom's standard message with public repository URL.
+	 * Forks and private deployments can override for custom branding or
+	 * internal support contact information.
+	 */
+	rejectionReply?: string;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -86,7 +93,9 @@ const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
 // P3: Rejection reply sent to non-owners in DMs. First message gets the
 // explanation, subsequent ones are silently dropped (tracked via rejectedUsers).
-const REJECTION_REPLY =
+// P5.5: Made configurable via TelegramChannelConfig.rejectionReply for forks
+// and private deployments. This is the default value.
+const DEFAULT_REJECTION_REPLY =
 	"Hi! I'm Phantom, a personal AI co-worker. I can only respond to my owner. " +
 	"<https://github.com/ghostwright/phantom>";
 
@@ -238,6 +247,16 @@ export class TelegramChannel implements Channel {
 
 	constructor(config: TelegramChannelConfig) {
 		this.config = config;
+
+		// P5.5: Validate owner ID format at construction (defense-in-depth)
+		if (config.ownerUserIds) {
+			const invalidIds = config.ownerUserIds.filter((id) => !/^\d+$/.test(id));
+			if (invalidIds.length > 0) {
+				console.warn(
+					`[telegram] Invalid owner_user_ids detected (non-numeric): ${invalidIds.join(", ")}`,
+				);
+			}
+		}
 	}
 
 	async connect(): Promise<void> {
@@ -841,7 +860,10 @@ export class TelegramChannel implements Channel {
 			if (access === "reject_dm") {
 				this.rejectedUsers.add(senderId);
 				try {
-					await this.bot?.telegram.sendMessage(chatId, REJECTION_REPLY);
+					// P5.5: Use configured rejection reply or default
+					const reply =
+						this.config.rejectionReply ?? DEFAULT_REJECTION_REPLY;
+					await this.bot?.telegram.sendMessage(chatId, reply);
 				} catch (err: unknown) {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.warn(`[telegram] Failed to send rejection reply: ${msg}`);

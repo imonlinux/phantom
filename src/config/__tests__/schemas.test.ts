@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NextcloudChannelConfigSchema, ChannelsConfigSchema } from "../schemas.ts";
+import { NextcloudChannelConfigSchema, ChannelsConfigSchema, TelegramChannelConfigSchema } from "../schemas.ts";
 
 describe("NextcloudChannelConfigSchema", () => {
 	test("accepts minimal valid config", () => {
@@ -219,6 +219,64 @@ describe("ChannelsConfigSchema: nextcloud round-trip", () => {
 		expect(r.success).toBe(true);
 		if (r.success) {
 			expect(r.data.nextcloud?.bot_id).toBe("7");
+		}
+	});
+});
+
+describe("TelegramChannelConfigSchema", () => {
+	test("accepts valid numeric owner_user_ids", () => {
+		const r = TelegramChannelConfigSchema.safeParse({
+			enabled: true,
+			bot_token: "test_token",
+			owner_user_ids: ["123456789", "987654321"],
+		});
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.owner_user_ids).toEqual(["123456789", "987654321"]);
+		}
+	});
+
+	test("accepts empty owner_user_ids array", () => {
+		const r = TelegramChannelConfigSchema.safeParse({
+			enabled: true,
+			bot_token: "test_token",
+			owner_user_ids: [],
+		});
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.owner_user_ids).toEqual([]);
+		}
+	});
+
+	test("rejects non-numeric owner_user_ids", () => {
+		const r = TelegramChannelConfigSchema.safeParse({
+			enabled: true,
+			bot_token: "test_token",
+			owner_user_ids: ["abc", "-1", ""],
+		});
+		expect(r.success).toBe(false);
+	});
+
+	test("accepts custom rejection_reply", () => {
+		const r = TelegramChannelConfigSchema.safeParse({
+			enabled: true,
+			bot_token: "test_token",
+			rejection_reply: "Custom rejection message",
+		});
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.rejection_reply).toBe("Custom rejection message");
+		}
+	});
+
+	test("accepts config without rejection_reply", () => {
+		const r = TelegramChannelConfigSchema.safeParse({
+			enabled: true,
+			bot_token: "test_token",
+		});
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.rejection_reply).toBeUndefined();
 		}
 	});
 });

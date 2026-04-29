@@ -380,3 +380,36 @@ describe("P3: edge cases", () => {
 		expect(sentReplies.length).toBe(1);
 	});
 });
+
+describe("P5.5: Security hardening", () => {
+	test("uses custom rejection reply when configured", async () => {
+		const customReply = "This is a private bot. Contact admin@example.com for access.";
+		const { channel, handlers, sentReplies } = makeChannelWithMockBot({
+			botToken: "test",
+			ownerUserIds: ["8649220840"],
+			rejectionReply: customReply,
+		});
+		channel.onMessage(async () => {});
+
+		const ctx = makeTextCtx({ chatId: 555, userId: 555, text: "hi", chatType: "private" });
+		await handlers.text?.(ctx);
+
+		expect(sentReplies.length).toBe(1);
+		expect(sentReplies[0].text).toBe(customReply);
+	});
+
+	test("uses default rejection reply when custom reply not configured", async () => {
+		const { channel, handlers, sentReplies } = makeChannelWithMockBot({
+			botToken: "test",
+			ownerUserIds: ["8649220840"],
+		});
+		channel.onMessage(async () => {});
+
+		const ctx = makeTextCtx({ chatId: 555, userId: 555, text: "hi", chatType: "private" });
+		await handlers.text?.(ctx);
+
+		expect(sentReplies.length).toBe(1);
+		expect(sentReplies[0].text).toContain("Phantom");
+		expect(sentReplies[0].text).toContain("github.com/ghostwright/phantom");
+	});
+});

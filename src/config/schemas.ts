@@ -97,7 +97,13 @@ export const TelegramChannelConfigSchema = z.object({
 	// Empty array (default) means no access control — backwards compatible.
 	// Find your ID by sending any message to @userinfobot on Telegram.
 	// Use the numeric ID, not your @username.
-	owner_user_ids: z.array(z.string()).default([]),
+	// P5.5: Validate format to prevent obviously-invalid values (negative, empty, non-numeric).
+	owner_user_ids: z.array(
+		z.string().regex(/^\d+$/, "Telegram user IDs must be numeric strings (e.g., '123456789')")
+	).default([]),
+	// P5.5: Optional custom rejection message for non-owners in DMs.
+	// Defaults to Phantom's standard message. Useful for forks and private deployments.
+	rejection_reply: z.string().optional(),
 });
 
 export const EmailChannelConfigSchema = z.object({

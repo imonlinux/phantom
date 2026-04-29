@@ -85,14 +85,14 @@ export type TelegramChannelConfig = {
 	 */
 	rejectionReply?: string;
 	/**
-	 * P6: Optional owner chat ID for proactive first-run intro message.
-	 * When set, the bot sends a welcome message on first startup:
+	 * P6: Enable proactive first-run intro message. When true, sends a welcome
+	 * message to the first owner in owner_user_ids on first startup:
 	 * "Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do."
-	 * This is typically the owner's Telegram user ID (numeric, as a string).
 	 * The intro is only sent once per channel - tracked in the channel_intros table.
-	 * If not set, no intro message is sent (silent startup).
+	 * If owner_user_ids is empty, no intro is sent even if this is true.
+	 * Defaults to false (silent startup).
 	 */
-	ownerChatId?: string;
+	sendIntro?: boolean;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -802,14 +802,18 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
-	 * P6: Send proactive intro message on first startup if owner_chat_id is configured.
+	 * P6: Send proactive intro message on first startup if send_intro is enabled.
 	 * The intro is only sent once per channel - tracked in the channel_intros table.
 	 * This method is called after the bot successfully connects.
 	 */
 	private async sendProactiveIntroIfFirstRun(): Promise<void> {
-		const { ownerChatId } = this.config;
-		if (!ownerChatId) return; // No owner chat configured, skip
+		const { sendIntro, ownerUserIds } = this.config;
+		if (!sendIntro) return; // Intro feature not enabled
+		if (!ownerUserIds || ownerUserIds.length === 0) return; // No owners to send to
 		if (!this.db) return; // No database available, skip
+
+		// Use the first owner ID for the intro
+		const targetChatId = ownerUserIds[0];
 
 		try {
 			// Check if intro was already sent
@@ -825,15 +829,15 @@ export class TelegramChannel implements Channel {
 			// Send intro message
 			const introText =
 				"Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.";
-			await this.bot?.telegram.sendMessage(parseInt(ownerChatId, 10), introText);
+			await this.bot?.telegram.sendMessage(parseInt(targetChatId, 10), introText);
 
 			// Mark as sent
 			this.db.run(
 				"INSERT OR REPLACE INTO channel_intros (channel_id, intro_sent_at, sent_to_chat_id) VALUES (?, datetime('now'), ?)",
-				["telegram", ownerChatId],
+				["telegram", targetChatId],
 			);
 
-			console.log(`[telegram] Sent intro message to chat ${ownerChatId}`);
+			console.log(`[telegram] Sent intro message to chat ${targetChatId}`);
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[telegram] Failed to send intro message: ${msg}`);

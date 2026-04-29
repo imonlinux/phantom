@@ -415,7 +415,7 @@ describe("P5.5: Security hardening", () => {
 });
 
 describe("P6: Proactive intro", () => {
-	test("sends intro message on first connect when owner_chat_id is configured", async () => {
+	test("sends intro message on first connect when send_intro is true", async () => {
 		const { Database } = require("bun:sqlite");
 		const { runMigrations } = require("../../db/migrate.ts");
 		const db = new Database(":memory:");
@@ -437,7 +437,8 @@ describe("P6: Proactive intro", () => {
 
 		const channel = new TelegramChannel({
 			botToken: "test-token",
-			ownerChatId: "123456789", // Owner's chat ID
+			ownerUserIds: ["123456789"], // Owner's chat ID
+			sendIntro: true, // Enable intro
 		});
 
 		// Inject mock bot and database
@@ -489,7 +490,8 @@ describe("P6: Proactive intro", () => {
 
 		const channel = new TelegramChannel({
 			botToken: "test-token",
-			ownerChatId: "123456789",
+			ownerUserIds: ["123456789"],
+			sendIntro: true,
 		});
 
 		// Inject mock bot and database
@@ -505,7 +507,7 @@ describe("P6: Proactive intro", () => {
 		db.close();
 	});
 
-	test("does not send intro when owner_chat_id is not configured", async () => {
+	test("does not send intro when send_intro is false", async () => {
 		const { Database } = require("bun:sqlite");
 		const { runMigrations } = require("../../db/migrate.ts");
 		const db = new Database(":memory:");
@@ -525,7 +527,8 @@ describe("P6: Proactive intro", () => {
 
 		const channel = new TelegramChannel({
 			botToken: "test-token",
-			// No ownerChatId configured
+			ownerUserIds: ["123456789"],
+			sendIntro: false, // Intro disabled
 		});
 
 		// Inject mock bot and database
@@ -558,7 +561,8 @@ describe("P6: Proactive intro", () => {
 
 		const channel = new TelegramChannel({
 			botToken: "test-token",
-			ownerChatId: "123456789",
+			ownerUserIds: ["123456789"],
+			sendIntro: true,
 		});
 
 		// Inject mock bot and database
@@ -575,6 +579,43 @@ describe("P6: Proactive intro", () => {
 			// If an exception was thrown, the test fails
 			expect.fail(`sendProactiveIntroIfFirstRun should not throw, but threw: ${err}`);
 		}
+
+		db.close();
+	});
+
+	test("does not send intro when owner_user_ids is empty", async () => {
+		const { Database } = require("bun:sqlite");
+		const { runMigrations } = require("../../db/migrate.ts");
+		const db = new Database(":memory:");
+		runMigrations(db);
+
+		let introSent = false;
+
+		const mockBot = {
+			telegram: {
+				getMe: async () => ({ id: 123, username: "testbot" }),
+				sendMessage: async (_chatId: number, _text: string) => {
+					introSent = true;
+					return { message_id: 1 };
+				},
+			},
+		};
+
+		const channel = new TelegramChannel({
+			botToken: "test-token",
+			ownerUserIds: [], // No owners configured
+			sendIntro: true, // Even though intro is enabled
+		});
+
+		// Inject mock bot and database
+		(channel as unknown as { bot: typeof mockBot }).bot = mockBot as unknown;
+		(channel as unknown as { db: Database }).db = db;
+
+		// Test sendProactiveIntroIfFirstRun directly
+		await channel["sendProactiveIntroIfFirstRun"]();
+
+		// Verify intro was NOT sent (no owners to send to)
+		expect(introSent).toBe(false);
 
 		db.close();
 	});

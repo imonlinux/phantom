@@ -280,24 +280,26 @@ describe("TelegramChannelConfigSchema", () => {
 		}
 	});
 
-	test("accepts owner_chat_id (numeric string)", () => {
+	test("accepts send_intro boolean true", () => {
 		const r = TelegramChannelConfigSchema.safeParse({
 			enabled: true,
 			bot_token: "test_token",
-			owner_chat_id: "123456789",
+			send_intro: true,
 		});
 		expect(r.success).toBe(true);
 		if (r.success) {
-			expect(r.data.owner_chat_id).toBe("123456789");
+			expect(r.data.send_intro).toBe(true);
 		}
 	});
 
-	test("rejects non-numeric owner_chat_id", () => {
+	test("defaults send_intro to false", () => {
 		const r = TelegramChannelConfigSchema.safeParse({
 			enabled: true,
 			bot_token: "test_token",
-			owner_chat_id: "abc",
 		});
-		expect(r.success).toBe(false);
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.send_intro).toBe(false);
+		}
 	});
 });

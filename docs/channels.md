@@ -228,21 +228,22 @@ or
 
 ### Proactive intro message
 
-When you first set up Phantom on Telegram, you may want it to send you a welcome message to confirm it's connected and listening. Set `owner_chat_id` to your Telegram numeric user ID:
+When you first set up Phantom on Telegram, you may want it to send you a welcome message to confirm it's connected and listening. Enable `send_intro` to send a welcome message to the first owner in `owner_user_ids`:
 
 \`\`\`yaml
 channels:
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
-    owner_chat_id: "123456789"  # Your Telegram user ID
+    owner_user_ids: ["123456789"]  # Your Telegram user ID
+    send_intro: true  # Enable proactive intro
 \`\`\`
 
 On first startup, Phantom will send you this DM:
 
 > "Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do."
 
-The intro is only sent once per channel - tracked in the database to avoid re-sending on restart. If you don't set `owner_chat_id`, no intro message is sent (silent startup).
+The intro is only sent once per channel - tracked in the database to avoid re-sending on restart. If `send_intro` is false (default) or `owner_user_ids` is empty, no intro message is sent (silent startup).
 
 ### Features
 

@@ -336,7 +336,7 @@ async function main(): Promise<void> {
 				enableMessageReactions: channelsConfig.telegram.enable_message_reactions,
 				ownerUserIds: channelsConfig.telegram.owner_user_ids,
 				rejectionReply: channelsConfig.telegram.rejection_reply,
-				ownerChatId: channelsConfig.telegram.owner_chat_id,
+				sendIntro: channelsConfig.telegram.send_intro,
 			},
 			db, // P6: Pass database for intro tracking
 		);

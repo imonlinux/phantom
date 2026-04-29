@@ -173,6 +173,9 @@ describe("TelegramChannel webhook mode (P8)", () => {
 			const update = { update_id: 123, message: { text: "test" } };
 			const result = await channel.handleWebhook(update, "test-secret", 123);
 
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
 			expect(result.status).toBe(200);
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(1);
 		});
@@ -185,12 +188,20 @@ describe("TelegramChannel webhook mode (P8)", () => {
 
 			// First call - should process
 			const result1 = await channel.handleWebhook(update, "test-secret", 123);
+
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
 			expect(result1.status).toBe(200);
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(1);
 
 			// Second call with same update_id - should return 200 but not process
 			const result2 = await channel.handleWebhook(update, "test-secret", 123);
 			expect(result2.status).toBe(200); // Return 200 so Telegram stops retrying
+
+			// Wait to ensure no async processing happens
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(1); // Still only called once
 		});
 
@@ -203,6 +214,9 @@ describe("TelegramChannel webhook mode (P8)", () => {
 
 			await channel.handleWebhook(update1, "test-secret", 123);
 			await channel.handleWebhook(update2, "test-secret", 124);
+
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(2);
 		});
@@ -221,15 +235,24 @@ describe("TelegramChannel webhook mode (P8)", () => {
 				await channel.handleWebhook(update, "test-secret", i);
 			}
 
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 50));
+
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(10);
 
 			// This should evict the oldest entry (update_id 1)
 			const update = { update_id: 11, message: { text: "test11" } };
 			await channel.handleWebhook(update, "test-secret", 11);
 
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
 			// Now update_id 1 should be evicted, so we can process it again
 			const oldUpdate = { update_id: 1, message: { text: "test1-again" } };
 			await channel.handleWebhook(oldUpdate, "test-secret", 1);
+
+			// Wait for async processing to complete
+			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			expect(mockHandleUpdate).toHaveBeenCalledTimes(12); // 10 initial + 2 new
 		});

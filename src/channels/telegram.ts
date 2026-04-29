@@ -492,9 +492,13 @@ export class TelegramChannel implements Channel {
 	 * processed by Telegraf's internal handlers. The update format is the same
 	 * regardless of transport.
 	 *
+	 * IMPORTANT: Returns 200 OK immediately and processes asynchronously to avoid
+	 * Telegram webhook timeouts. Agent sessions can take 50-80+ seconds, but Telegram
+	 * expects webhook responses within ~30 seconds (hard timeout at 90 seconds).
+	 *
 	 * @param update - Raw Telegram update object from webhook POST body
 	 * @param secret - Secret token from X-Telegram-Bot-Api-Secret-Token header for verification
-	 * @param updateId - Update ID for deduplication (added to cache after successful processing)
+	 * @param updateId - Update ID for deduplication (added to cache before async processing)
 	 * @returns 200 if successful, 4xx/5xx on error
 	 */
 	public async handleWebhook(
@@ -526,21 +530,40 @@ export class TelegramChannel implements Channel {
 			return { status: 200, body: "OK" }; // Return 200 so Telegram stops retrying
 		}
 
-		try {
-			// Process the update using Telegraf's handleUpdate
-			await this.processWebhookUpdate(update);
-
-			// P8: Add update to deduplication cache after successful processing
-			if (updateId !== undefined) {
-				this.addUpdateToCache(updateId);
-			}
-
-			return { status: 200, body: "OK" };
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error(`[telegram] Webhook processing error: ${msg}`);
-			return { status: 500, body: "Internal Server Error" };
+		// P8: Add update to deduplication cache BEFORE async processing to prevent
+		// race conditions where Telegram retries before we finish processing
+		if (updateId !== undefined) {
+			this.addUpdateToCache(updateId);
 		}
+
+		// CRITICAL: Process asynchronously and return 200 immediately to avoid webhook timeouts.
+		// Agent sessions take 50-80+ seconds, but Telegram expects webhook responses within
+		// ~30 seconds (hard timeout at 90 seconds). The deduplication cache prevents duplicate
+		// processing if Telegram retries.
+		this.processWebhookUpdateAsync(update, updateId);
+
+		return { status: 200, body: "OK" };
+	}
+
+	/**
+	 * P8: Process webhook update asynchronously without blocking the HTTP response.
+	 * Logs errors but never throws to prevent unhandled promise rejections.
+	 *
+	 * @param update - Raw Telegram update object from webhook POST body
+	 * @param updateId - Update ID for logging purposes
+	 */
+	private processWebhookUpdateAsync(update: unknown, updateId?: number): void {
+		const updateLog = updateId !== undefined ? ` update ${updateId}` : "";
+		// Fire-and-forget: process without awaiting. Errors are logged but not thrown.
+		this.processWebhookUpdate(update)
+			.then(() => {
+				console.log(`[telegram] Async webhook${updateLog} processing completed`);
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Async webhook${updateLog} processing failed: ${msg}`);
+				// Don't throw - this is a background task and the response was already sent
+			});
 	}
 
 	/**

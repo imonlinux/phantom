@@ -133,6 +133,7 @@
 			channels: {
 				slack: !!(full.channels && full.channels.slack && full.channels.slack.enabled),
 				telegram: !!(full.channels && full.channels.telegram && full.channels.telegram.enabled),
+				nextcloud: !!(full.channels && full.channels.nextcloud && full.channels.nextcloud.enabled),
 				email: !!(full.channels && full.channels.email && full.channels.email.enabled),
 				webhook: !!(full.channels && full.channels.webhook && full.channels.webhook.enabled),
 			},
@@ -185,6 +186,7 @@
 				channels: {
 					slack: { enabled: !!draft.slack },
 					telegram: { enabled: !!draft.telegram },
+					nextcloud: { enabled: !!draft.nextcloud },
 					email: { enabled: !!draft.email },
 					webhook: { enabled: !!draft.webhook },
 				},
@@ -458,6 +460,12 @@
 				toggleHtml("telegram", d.telegram, "channels", d.telegram ? "on" : "off"),
 				'Token: <code>TELEGRAM_BOT_TOKEN</code> in <code>.env</code>.',
 				"err-channels-telegram"
+			) +
+			fieldBlock(
+				'Nextcloud Talk',
+				toggleHtml("nextcloud", d.nextcloud, "channels", d.nextcloud ? "on" : "off"),
+				'Talk Bot credentials in <code>channels.yaml</code>, mapped from <code>.env</code>.',
+				"err-channels-nextcloud"
 			) +
 			fieldBlock(
 				'Email',

@@ -30,6 +30,7 @@ import {
 	setPeerHealthProvider,
 	setRoleInfoProvider,
 	setSchedulerHealthProvider,
+	setTelegramWebhookHandler,
 	setTriggerDeps,
 	setWebhookHandler,
 	startServer,
@@ -337,10 +338,20 @@ async function main(): Promise<void> {
 				ownerUserIds: channelsConfig.telegram.owner_user_ids,
 				rejectionReply: channelsConfig.telegram.rejection_reply,
 				sendIntro: channelsConfig.telegram.send_intro,
+				// P8: Webhook configuration (optional)
+				webhookUrl: channelsConfig.telegram.webhook_url,
+				webhookSecret: channelsConfig.telegram.webhook_secret,
 			},
 			db, // P6: Pass database for intro tracking
 		);
 		router.register(telegramChannel);
+
+		// P8: Register webhook handler if webhook mode is enabled
+		if (channelsConfig.telegram.webhook_url) {
+			setTelegramWebhookHandler(telegramChannel.createWebhookHandler());
+			console.log("[phantom] Telegram webhook handler registered at /telegram/webhook");
+		}
+
 		console.log("[phantom] Telegram channel registered");
 	}
 

@@ -108,6 +108,12 @@ export const TelegramChannelConfigSchema = z.object({
 	// message to the first owner in owner_user_ids on first startup.
 	// Intro tracked in channel_intros table to prevent re-sending.
 	send_intro: z.boolean().default(false),
+	// P8: Webhook mode configuration. When webhook_url is set, uses webhook transport
+	// instead of long-polling. Webhook mode is more efficient for production deployments.
+	// webhook_url: Public HTTPS URL where Telegram sends updates (e.g., https://example.com/telegram/webhook)
+	// webhook_secret: Optional token to verify webhook requests are from Telegram
+	webhook_url: z.string().url().optional(),
+	webhook_secret: z.string().optional(),
 });
 
 export const EmailChannelConfigSchema = z.object({

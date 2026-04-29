@@ -23,6 +23,8 @@ type TelegrafBot = {
 	action: (pattern: RegExp, handler: (ctx: TelegrafContext) => Promise<void>) => void;
 	reaction: (emoji: string | string[], handler: (ctx: TelegrafContext) => Promise<void>) => void;
 	telegram: TelegramApi;
+	// P8: handleUpdate method for processing webhook updates
+	handleUpdate: (update: unknown) => Promise<unknown>;
 };
 
 type TelegramApi = {
@@ -93,6 +95,24 @@ export type TelegramChannelConfig = {
 	 * Defaults to false (silent startup).
 	 */
 	sendIntro?: boolean;
+	/**
+	 * P8: Webhook mode configuration. When set, uses webhook transport instead
+	 * of long-polling. Webhook mode is more efficient for production deployments
+	 * as Telegram pushes updates instead of the bot polling.
+	 *
+	 * webhookUrl: Public HTTPS URL where Telegram will send updates (e.g., https://example.com/telegram/webhook)
+	 * webhookSecret: Optional token to verify webhook requests are from Telegram
+	 *
+	 * When webhook mode is enabled:
+	 * - On connect: registers webhook with Telegram via setWebhook API
+	 * - On disconnect: deletes webhook via deleteWebhook API
+	 * - No health check polling needed (webhooks are push-based)
+	 * - No long-polling slot contention issues
+	 *
+	 * Default: undefined (long-polling mode)
+	 */
+	webhookUrl?: string;
+	webhookSecret?: string;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -256,6 +276,124 @@ export class TelegramChannel implements Channel {
 		throw lastError;
 	}
 
+	/**
+	 * P8: Check if webhook mode is enabled via configuration.
+	 */
+	private isWebhookMode(): boolean {
+		return Boolean(this.config.webhookUrl && this.config.webhookUrl.trim().length > 0);
+	}
+
+	/**
+	 * P8: Register webhook with Telegram API. Called during connect() in webhook mode.
+	 * Uses Telegram's setWebhook API to tell Telegram where to send updates.
+	 */
+	private async registerWebhook(): Promise<void> {
+		if (!this.bot) {
+			throw new Error("Cannot register webhook: bot not initialized");
+		}
+
+		const webhookUrl = this.config.webhookUrl!;
+		const secret = this.config.webhookSecret;
+
+		console.log(`[telegram] Registering webhook: ${webhookUrl}`);
+
+		try {
+			// Call Telegram's setWebhook API
+			const response = await this.bot.telegram.setWebhook(webhookUrl, {
+				secret_token: secret,
+				drop_pending_updates: true, // Drop any pending updates from previous webhook
+			});
+
+			console.log("[telegram] Webhook registered successfully");
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to register Telegram webhook: ${msg}`);
+		}
+	}
+
+	/**
+	 * P8: Unregister webhook with Telegram API. Called during disconnect() in webhook mode.
+	 * Uses Telegram's deleteWebhook API to stop sending updates to the webhook URL.
+	 */
+	private async unregisterWebhook(): Promise<void> {
+		if (!this.bot) return;
+
+		console.log("[telegram] Unregistering webhook");
+
+		try {
+			await this.bot.telegram.deleteWebhook();
+			console.log("[telegram] Webhook unregistered successfully");
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Failed to unregister webhook: ${msg}`);
+			// Don't throw - we're in disconnect() cleanup, should always succeed
+		}
+	}
+
+	/**
+	 * P8: Handle incoming webhook update from Telegram. Called by the HTTP server
+	 * when a POST request arrives at the webhook URL.
+	 *
+	 * This method processes the update exactly like a long-polling update would be
+	 * processed by Telegraf's internal handlers. The update format is the same
+	 * regardless of transport.
+	 *
+	 * @param update - Raw Telegram update object from webhook POST body
+	 * @param secret - Secret token from X-Telegram-Bot-Api-Secret-Token header for verification
+	 * @returns 200 if successful, 4xx/5xx on error
+	 */
+	public async handleWebhook(update: unknown, secret?: string): Promise<{ status: number; body: string }> {
+		// Verify webhook secret if configured
+		if (this.config.webhookSecret) {
+			if (secret !== this.config.webhookSecret) {
+				console.warn("[telegram] Webhook secret verification failed");
+				return { status: 401, body: "Unauthorized" };
+			}
+		}
+
+		if (!this.bot) {
+			console.error("[telegram] Webhook received but bot not initialized");
+			return { status: 503, body: "Service Unavailable" };
+		}
+
+		if (this.connectionState !== "connected") {
+			console.warn("[telegram] Webhook received but not connected");
+			return { status: 503, body: "Service Unavailable" };
+		}
+
+		try {
+			// Telegraf's internal webhook handling is complex. Instead of replicating it,
+			// we manually parse the update and call the appropriate handlers.
+			// This is a simplified version that handles the most common update types.
+			await this.processWebhookUpdate(update);
+			return { status: 200, body: "OK" };
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Webhook processing error: ${msg}`);
+			return { status: 500, body: "Internal Server Error" };
+		}
+	}
+
+	/**
+	 * P8: Process a webhook update and route it to the appropriate Telegraf handlers.
+	 * Uses Telegraf's built-in handleUpdate method to ensure all handlers work correctly.
+	 */
+	private async processWebhookUpdate(update: unknown): Promise<void> {
+		if (!this.bot) {
+			throw new Error("Bot not initialized");
+		}
+
+		// Use Telegraf's built-in handleUpdate method to process the webhook update
+		// This ensures all registered handlers (commands, on, action, reaction) work correctly
+		try {
+			await this.bot.handleUpdate(update);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Error handling webhook update: ${msg}`);
+			throw err;
+		}
+	}
+
 	constructor(config: TelegramChannelConfig, db: Database | null = null) {
 		this.config = config;
 		this.db = db; // P6: Database for intro tracking
@@ -274,6 +412,13 @@ export class TelegramChannel implements Channel {
 	async connect(): Promise<void> {
 		if (this.connectionState === "connected") return;
 
+		// P8: Webhook mode uses a different connection flow
+		if (this.isWebhookMode()) {
+			await this.connectWebhookMode();
+			return;
+		}
+
+		// Long-polling mode (default)
 		// Try the initial connect. If it fails (typically because a previous
 		// process didn't release the long-poll slot — common when Docker
 		// SIGKILLs during shutdown), don't throw: schedule a supervised
@@ -290,6 +435,72 @@ export class TelegramChannel implements Channel {
 		}
 	}
 
+	/**
+	 * P8: Connect in webhook mode. Initializes the bot and registers the webhook
+	 * with Telegram API, but doesn't start polling. Updates are pushed to the
+	 * webhook URL instead.
+	 */
+	private async connectWebhookMode(): Promise<void> {
+		this.connectionState = "connecting";
+		console.log("[telegram] Connecting in webhook mode");
+
+		try {
+			const { Telegraf } = await import("telegraf");
+			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
+			this.registerHandlers();
+
+			// Verify bot token works
+			await this.bot.telegram.getMe();
+
+			// Register webhook with Telegram API
+			await this.registerWebhook();
+
+			// Send intro message if enabled (P6)
+			await this.sendProactiveIntroIfFirstRun();
+
+			this.connectionState = "connected";
+			console.log(`[telegram] Connected in webhook mode at ${this.config.webhookUrl}`);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Webhook mode connection failed: ${msg}`);
+			this.connectionState = "error";
+			throw new Error(`Failed to connect in webhook mode: ${msg}`);
+		}
+	}
+
+	/**
+	 * P8: Create a webhook handler for use with the HTTP server. Returns a function
+	 * that processes incoming Telegram webhook POST requests.
+	 *
+	 * This handler:
+	 * - Parses the request body as JSON
+	 * - Extracts the secret token from the X-Telegram-Bot-Api-Secret-Token header
+	 * - Calls handleWebhook with the update and secret
+	 * - Returns an appropriate HTTP response
+	 *
+	 * @returns A request handler function compatible with Bun.serve()
+	 */
+	public createWebhookHandler(): (req: Request) => Promise<Response> {
+		return async (req: Request): Promise<Response> => {
+			try {
+				// Parse request body
+				const update = await req.json();
+
+				// Extract secret token from header
+				const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") || undefined;
+
+				// Handle the webhook update
+				const result = await this.handleWebhook(update, secret);
+
+				return new Response(result.body, { status: result.status });
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Webhook request error: ${msg}`);
+				return Response.json({ error: "Invalid request" }, { status: 400 });
+			}
+		};
+	}
+
 	async disconnect(): Promise<void> {
 		if (this.connectionState === "disconnected") return;
 		this.shutdownRequested = true;
@@ -299,6 +510,11 @@ export class TelegramChannel implements Channel {
 			clearInterval(timer);
 		}
 		this.typingTimers.clear();
+
+		// P8: In webhook mode, unregister the webhook before disconnecting
+		if (this.isWebhookMode() && this.bot) {
+			await this.unregisterWebhook();
+		}
 
 		// Race bot.stop() against a hard timeout. Telegraf's stop() waits
 		// for in-flight polls to complete, which can exceed Docker's

@@ -341,6 +341,7 @@ async function main(): Promise<void> {
 				// P8: Webhook configuration (optional)
 				webhookUrl: channelsConfig.telegram.webhook_url,
 				webhookSecret: channelsConfig.telegram.webhook_secret,
+				verifyWebhookSourceIP: channelsConfig.telegram.verify_webhook_source_ip,
 			},
 			db, // P6: Pass database for intro tracking
 		);

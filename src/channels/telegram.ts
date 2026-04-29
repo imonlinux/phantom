@@ -102,6 +102,7 @@ export type TelegramChannelConfig = {
 	 *
 	 * webhookUrl: Public HTTPS URL where Telegram will send updates (e.g., https://example.com/telegram/webhook)
 	 * webhookSecret: Optional token to verify webhook requests are from Telegram
+	 * verifyWebhookSourceIP: Optional defense-in-depth check that verifies requests come from Telegram's IP ranges
 	 *
 	 * When webhook mode is enabled:
 	 * - On connect: registers webhook with Telegram via setWebhook API
@@ -113,6 +114,7 @@ export type TelegramChannelConfig = {
 	 */
 	webhookUrl?: string;
 	webhookSecret?: string;
+	verifyWebhookSourceIP?: boolean;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -120,6 +122,24 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 // Telegram's hard message length limit. Phase 5 will add proper splitting;
 // P2.2 falls back to a fresh send when the final response exceeds this.
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
+// P8: Update deduplication cache (prevents replay attacks from duplicate webhook deliveries)
+const MAX_UPDATE_CACHE_SIZE = 1000;
+const UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface UpdateCacheEntry {
+	updateId: number;
+	expiresAt: number;
+}
+
+// P8: Webhook request size limit (Telegram updates are far smaller than this in practice)
+const MAX_WEBHOOK_BODY_SIZE = 64 * 1024; // 64 KB
+
+// P8: Telegram webhook source IP ranges (for optional defense-in-depth)
+const TELEGRAM_WEBHOOK_IP_RANGES = [
+	"149.154.160.0/20",
+	"91.108.4.0/22",
+];
 
 // P3: Rejection reply sent to non-owners in DMs. First message gets the
 // explanation, subsequent ones are silently dropped (tracked via rejectedUsers).
@@ -167,6 +187,13 @@ export class TelegramChannel implements Channel {
 	// meaningfully. If we ever see runaway growth in the wild, swap for an
 	// LRU. Until then, simpler is better.
 	private rejectedUsers = new Set<string>();
+
+	// P8: Update deduplication cache for webhook mode. Telegram may retry
+	// webhook deliveries on non-2xx responses, so we track processed update_ids
+	// to prevent duplicate processing. Uses LRU eviction with TTL expiration.
+	// Same pattern as NextCloud's nonce cache.
+	private updateCache: Map<number, UpdateCacheEntry> = new Map();
+	private updateCachePruneTimer: ReturnType<typeof setInterval> | null = null;
 
 	// Connection supervision (interim fix; Phase 8 webhook mode is the real
 	// solution). Long-polling can silently drop without Telegraf surfacing the
@@ -284,6 +311,129 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
+	 * P8: Check if an update_id has already been processed (deduplication).
+	 * @param updateId - The update_id from Telegram
+	 * @returns true if duplicate, false if new
+	 */
+	private isUpdateDuplicate(updateId: number): boolean {
+		// Clean up expired entries first
+		this.pruneUpdates();
+
+		const entry = this.updateCache.get(updateId);
+		if (!entry) return false;
+
+		// Check if entry has expired
+		const now = Date.now();
+		if (now > entry.expiresAt) {
+			this.updateCache.delete(updateId);
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * P8: Add an update_id to the deduplication cache.
+	 * Implements LRU eviction: if cache is full, remove oldest entry.
+	 * @param updateId - The update_id from Telegram
+	 */
+	private addUpdateToCache(updateId: number): void {
+		// LRU eviction: if at capacity, remove the first (oldest) entry
+		if (this.updateCache.size >= MAX_UPDATE_CACHE_SIZE) {
+			const firstKey = this.updateCache.keys().next().value;
+			if (firstKey !== undefined) {
+				this.updateCache.delete(firstKey);
+			}
+		}
+
+		this.updateCache.set(updateId, {
+			updateId,
+			expiresAt: Date.now() + UPDATE_TTL_MS,
+		});
+	}
+
+	/**
+	 * P8: Remove expired entries from the update cache.
+	 */
+	private pruneUpdates(): void {
+		const now = Date.now();
+		let pruned = 0;
+
+		for (const [updateId, entry] of this.updateCache.entries()) {
+			if (now > entry.expiresAt) {
+				this.updateCache.delete(updateId);
+				pruned++;
+			}
+		}
+
+		if (pruned > 0) {
+			console.log(`[telegram] Pruned ${pruned} expired updates from cache`);
+		}
+	}
+
+	/**
+	 * P8: Start periodic update cache pruning (runs every minute).
+	 */
+	private startUpdateCachePruning(): void {
+		if (this.updateCachePruneTimer) return;
+
+		this.updateCachePruneTimer = setInterval(() => {
+			this.pruneUpdates();
+		}, 60_000); // Every minute
+	}
+
+	/**
+	 * P8: Stop update cache pruning timer.
+	 */
+	private stopUpdateCachePruning(): void {
+		if (this.updateCachePruneTimer) {
+			clearInterval(this.updateCachePruneTimer);
+			this.updateCachePruneTimer = null;
+		}
+	}
+
+	/**
+	 * P8: Check if a source IP is in Telegram's webhook IP ranges.
+	 * Optional defense-in-depth; secret_token is the primary security mechanism.
+	 * @param ip - The IP address to check
+	 * @returns true if IP is in Telegram's ranges, false otherwise
+	 */
+	private isTelegramWebhookIP(ip: string): boolean {
+		// Simple CIDR matching for the known Telegram ranges
+		// This is a basic implementation; for production, use a proper IP library
+		const telegramIPs = [
+			{ base: 149_154_160, mask: 0xFFFF_F000 }, // 149.154.160.0/20
+			{ base: 91_108_004, mask: 0xFFFF_FFFC }, // 91.108.4.0/22
+		];
+
+		const parts = ip.split(".").map(Number);
+		if (parts.length !== 4) return false;
+
+		const ipNum = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+
+		for (const range of telegramIPs) {
+			if ((ipNum & range.mask) === range.base) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * P8: Build the allowed_updates list for Telegram Bot API.
+	 * Includes message_reaction when enableMessageReactions is true.
+	 * Used by both webhook and long-polling modes.
+	 */
+	private buildAllowedUpdates(): string[] {
+		const allowedUpdates: string[] = ["message", "callback_query"];
+		if (this.config.enableMessageReactions) {
+			allowedUpdates.push("message_reaction");
+		}
+		return allowedUpdates;
+	}
+
+	/**
 	 * P8: Register webhook with Telegram API. Called during connect() in webhook mode.
 	 * Uses Telegram's setWebhook API to tell Telegram where to send updates.
 	 */
@@ -298,10 +448,14 @@ export class TelegramChannel implements Channel {
 		console.log(`[telegram] Registering webhook: ${webhookUrl}`);
 
 		try {
+			// Build allowed_updates list (includes message_reaction if enabled)
+			const allowedUpdates = this.buildAllowedUpdates();
+
 			// Call Telegram's setWebhook API
 			const response = await this.bot.telegram.setWebhook(webhookUrl, {
 				secret_token: secret,
 				drop_pending_updates: true, // Drop any pending updates from previous webhook
+				allowed_updates: allowedUpdates, // P8: Propagate allowed_updates to webhook
 			});
 
 			console.log("[telegram] Webhook registered successfully");
@@ -340,9 +494,14 @@ export class TelegramChannel implements Channel {
 	 *
 	 * @param update - Raw Telegram update object from webhook POST body
 	 * @param secret - Secret token from X-Telegram-Bot-Api-Secret-Token header for verification
+	 * @param updateId - Update ID for deduplication (added to cache after successful processing)
 	 * @returns 200 if successful, 4xx/5xx on error
 	 */
-	public async handleWebhook(update: unknown, secret?: string): Promise<{ status: number; body: string }> {
+	public async handleWebhook(
+		update: unknown,
+		secret?: string,
+		updateId?: number,
+	): Promise<{ status: number; body: string }> {
 		// Verify webhook secret if configured
 		if (this.config.webhookSecret) {
 			if (secret !== this.config.webhookSecret) {
@@ -362,10 +521,14 @@ export class TelegramChannel implements Channel {
 		}
 
 		try {
-			// Telegraf's internal webhook handling is complex. Instead of replicating it,
-			// we manually parse the update and call the appropriate handlers.
-			// This is a simplified version that handles the most common update types.
+			// Process the update using Telegraf's handleUpdate
 			await this.processWebhookUpdate(update);
+
+			// P8: Add update to deduplication cache after successful processing
+			if (updateId !== undefined) {
+				this.addUpdateToCache(updateId);
+			}
+
 			return { status: 200, body: "OK" };
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -455,6 +618,9 @@ export class TelegramChannel implements Channel {
 			// Register webhook with Telegram API
 			await this.registerWebhook();
 
+			// P8: Start update deduplication cache pruning
+			this.startUpdateCachePruning();
+
 			// Send intro message if enabled (P6)
 			await this.sendProactiveIntroIfFirstRun();
 
@@ -483,14 +649,50 @@ export class TelegramChannel implements Channel {
 	public createWebhookHandler(): (req: Request) => Promise<Response> {
 		return async (req: Request): Promise<Response> => {
 			try {
+				// P8: Check request body size before parsing
+				const contentLength = req.headers.get("content-length");
+				if (contentLength) {
+					const length = parseInt(contentLength, 10);
+					if (!isNaN(length) && length > MAX_WEBHOOK_BODY_SIZE) {
+						console.warn(`[telegram] Webhook request body too large: ${length} bytes`);
+						return Response.json({ error: "Request body too large" }, { status: 413 });
+					}
+				}
+
+				// P8: Optional source IP verification (defense-in-depth)
+				// Note: This requires the request to come through a reverse proxy that sets X-Forwarded-For
+				// In direct Bun.serve() scenarios, the IP may not be reliable
+				const forwardedFor = req.headers.get("x-forwarded-for");
+				if (forwardedFor && this.config.verifyWebhookSourceIP) {
+					const clientIP = forwardedFor.split(",")[0].trim();
+					if (!this.isTelegramWebhookIP(clientIP)) {
+						console.warn(`[telegram] Webhook from unrecognized IP: ${clientIP}`);
+						return Response.json({ error: "Forbidden" }, { status: 403 });
+					}
+				}
+
 				// Parse request body
 				const update = await req.json();
+
+				// Extract update_id for deduplication
+				const updateId = (update as Record<string, unknown>).update_id as number | undefined;
+				if (typeof updateId !== "number") {
+					console.error("[telegram] Webhook missing update_id");
+					return Response.json({ error: "Invalid update" }, { status: 400 });
+				}
+
+				// P8: Check for duplicate update (replay protection)
+				if (this.isUpdateDuplicate(updateId)) {
+					console.warn(`[telegram] Duplicate webhook update_id: ${updateId}`);
+					// Return 200 OK but don't process again (Telegram will stop retrying)
+					return new Response("OK", { status: 200 });
+				}
 
 				// Extract secret token from header
 				const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") || undefined;
 
 				// Handle the webhook update
-				const result = await this.handleWebhook(update, secret);
+				const result = await this.handleWebhook(update, secret, updateId);
 
 				return new Response(result.body, { status: result.status });
 			} catch (err: unknown) {
@@ -516,6 +718,9 @@ export class TelegramChannel implements Channel {
 			await this.unregisterWebhook();
 		}
 
+		// P8: Stop update deduplication cache pruning
+		this.stopUpdateCachePruning();
+
 		// Race bot.stop() against a hard timeout. Telegraf's stop() waits
 		// for in-flight polls to complete, which can exceed Docker's
 		// SIGTERM-to-SIGKILL window. If we time out, the slot stays held
@@ -539,13 +744,8 @@ export class TelegramChannel implements Channel {
 			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
 			this.registerHandlers();
 
-			// P2.4: subscribe to message_reaction updates only when the operator
-			// has opted in. Default polling does NOT include reaction events;
-			// without this, bot.reaction handlers never fire.
-			const allowedUpdates: string[] = ["message", "callback_query"];
-			if (this.config.enableMessageReactions) {
-				allowedUpdates.push("message_reaction");
-			}
+			// P8: Build allowed_updates list (reused from webhook mode)
+			const allowedUpdates = this.buildAllowedUpdates();
 
 			// CRITICAL: bot.launch() in long-polling mode returns a promise
 			// that resolves when polling STOPS, not when it starts. Awaiting

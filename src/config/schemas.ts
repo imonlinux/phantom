@@ -112,8 +112,10 @@ export const TelegramChannelConfigSchema = z.object({
 	// instead of long-polling. Webhook mode is more efficient for production deployments.
 	// webhook_url: Public HTTPS URL where Telegram sends updates (e.g., https://example.com/telegram/webhook)
 	// webhook_secret: Optional token to verify webhook requests are from Telegram
+	// verify_webhook_source_ip: Optional defense-in-depth check that verifies requests come from Telegram's IP ranges
 	webhook_url: z.string().url().optional(),
 	webhook_secret: z.string().optional(),
+	verify_webhook_source_ip: z.boolean().default(false),
 });
 
 export const EmailChannelConfigSchema = z.object({

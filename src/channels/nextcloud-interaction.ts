@@ -189,4 +189,6 @@ export function createNextcloudInteractionFactory(
 				statusReactions.dispose();
 			},
 		};
+	}
+  } 
 }

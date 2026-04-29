@@ -425,8 +425,10 @@ export class NextcloudChannel implements Channel {
 				const suffix = recent.conversation_id.slice(prefix.length);
 				threadRoot = suffix;
 			} else {
-				// Start a new session
-				threadRoot = msgId ?? "room";
+				// Start a new session with a stable room-level thread root
+				// Use "room" instead of msgId to ensure all top-level messages
+				// in this room coalesce into a single conversation over time
+				threadRoot = "room";
 			}
 		}
 		const conversationId = `nextcloud:${roomToken}:${threadRoot}`;

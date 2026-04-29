@@ -904,8 +904,10 @@ describe("NextcloudChannel", () => {
 			expect(threadRoot).toBe(456);
 		});
 
-		test("uses message ID as thread root for top-level messages", () => {
-			// Top-level message (no parent): use msgId as thread root
+		test("uses stable room-level thread root for top-level messages", () => {
+			// Top-level message (no parent): use "room" as stable thread root
+			// This ensures all top-level messages in the room coalesce into
+			// a single conversation over time, instead of creating N unique sessions
 			const msgId = 789;
 			const parentMessageId = undefined;
 			let threadRoot: number | string;
@@ -913,10 +915,10 @@ describe("NextcloudChannel", () => {
 			if (parentMessageId !== undefined) {
 				threadRoot = parentMessageId;
 			} else {
-				threadRoot = msgId ?? "room";
+				threadRoot = "room";
 			}
 
-			expect(threadRoot).toBe(789);
+			expect(threadRoot).toBe("room");
 		});
 	});
 

@@ -371,7 +371,7 @@ export class NextcloudChannel implements Channel {
 
 		const roomName = target?.name ?? "room";
 
-		console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName}: ${message.slice(0, 80)}`);
+		console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`);
 
 		// Only process new messages
 		if (type !== "Create") {

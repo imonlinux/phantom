@@ -154,6 +154,10 @@ export const NextcloudChannelConfigSchema = z
 		port: z.number().int().min(1).max(65535).default(3200),
 		bot_id: z.string().optional(),
 		session_window_minutes: z.number().int().min(1).default(30),
+		// Phase 3: Owner access control - only this user can trigger the bot
+		// Matches Nextcloud user ID (from webhook payload actor.id field)
+		// When omitted, bot responds to everyone (backward compatible)
+		owner_user_id: z.string().optional(),
 	})
 	.strict();
 

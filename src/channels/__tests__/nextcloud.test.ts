@@ -953,4 +953,77 @@ describe("NextcloudChannel", () => {
 			expect(warningEmoji).toBe("⚠");
 		});
 	});
+
+	describe("Phase 3: Owner access control", () => {
+		test("allows messages from owner when ownerUserId is configured", () => {
+			// When ownerUserId is set, only that user can trigger the bot
+			const ownerConfig: NextcloudChannelConfig = {
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				ownerUserId: "admin123", // Only this user is authorized
+			};
+
+			const ownerChannel = new NextcloudChannel(ownerConfig);
+
+			// Access private method for testing
+			const isOwner = (ownerChannel as any).isOwner.bind(ownerChannel);
+
+			expect(isOwner("admin123")).toBe(true);
+			expect(isOwner("otheruser")).toBe(false);
+		});
+
+		test("allows all messages when ownerUserId is not configured", () => {
+			// When ownerUserId is not set, bot responds to everyone (backward compatible)
+			const openConfig: NextcloudChannelConfig = {
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				// No ownerUserId - allow everyone
+			};
+
+			const openChannel = new NextcloudChannel(openConfig);
+
+			// Access private method for testing
+			const isOwner = (openChannel as any).isOwner.bind(openChannel);
+
+			expect(isOwner("anyone")).toBe(true);
+			expect(isOwner("admin123")).toBe(true);
+			expect(isOwner("")).toBe(true);
+		});
+
+		test("tracks rejected users to avoid spam", async () => {
+			// The rejection message should only be sent once per user
+			const ownerConfig: NextcloudChannelConfig = {
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				ownerUserId: "admin123",
+			};
+
+			const ownerChannel = new NextcloudChannel(ownerConfig);
+
+			// Mock postToNextcloud to track calls
+			let rejectionCount = 0;
+			ownerChannel["postToNextcloud"] = async (_roomToken: string, _message: string) => {
+				rejectionCount++;
+				return true;
+			};
+
+			// Access private method for testing
+			const rejectNonOwner = (ownerChannel as any).rejectNonOwner.bind(ownerChannel);
+
+			// First rejection should send a message
+			await rejectNonOwner("intruder1", ROOM_TOKEN);
+			expect(rejectionCount).toBe(1);
+
+			// Second rejection for same user should not send (already tracked)
+			await rejectNonOwner("intruder1", ROOM_TOKEN);
+			expect(rejectionCount).toBe(1); // Still 1, not incremented
+
+			// Different user should trigger a new rejection
+			await rejectNonOwner("intruder2", ROOM_TOKEN);
+			expect(rejectionCount).toBe(2);
+		});
+	});
 });

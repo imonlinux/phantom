@@ -21,6 +21,7 @@ export type NextcloudChannelConfig = {
 	port?: number;
 	sessionWindowMinutes?: number;
 	botId?: string; // Fix #12: Bot's own ID for self-filtering to prevent bot loops
+	ownerUserId?: string; // Phase 3: Owner access control - only this user can trigger the bot
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -72,6 +73,8 @@ export class NextcloudChannel implements Channel {
 	private nonceCachePruneTimer: ReturnType<typeof setInterval> | null = null;
 	// Session store for time-window coalescing
 	private sessionStore: SessionStore | null = null;
+	// Phase 3: Owner access control
+	private rejectedUsers = new Set<string>();
 
 	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
@@ -387,6 +390,13 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
+		// Phase 3: Owner access control - reject messages from non-owners
+		if (!this.isOwner(actorId)) {
+			console.log(`[nextcloud] Rejecting message from non-owner ${actorId} (owner=${this.config.ownerUserId ?? "none"})`);
+			await this.rejectNonOwner(actorId, roomToken);
+			return { status: 200, error: undefined };
+		}
+
 		// Ignore empty messages
 		if (!message) {
 			return { status: 200, error: undefined };
@@ -692,6 +702,28 @@ export class NextcloudChannel implements Channel {
 			return null;
 		}
 		return conversationId.slice(prefix.length);
+	}
+
+	// Phase 3: Owner access control methods
+	private isOwner(userId: string): boolean {
+		if (!this.config.ownerUserId) return true;
+		return userId === this.config.ownerUserId;
+	}
+
+	private async rejectNonOwner(userId: string, roomToken: string): Promise<void> {
+		// Only send the rejection once per user to avoid spam
+		if (this.rejectedUsers.has(userId)) return;
+		this.rejectedUsers.add(userId);
+
+		const rejectionMessage =
+			"Hi! I'm Phantom, a personal AI co-worker. I can only respond to my owner. " +
+			"If you need your own, check out github.com/ghostwright/phantom.";
+
+		try {
+			await this.postToNextcloud(roomToken, rejectionMessage);
+		} catch {
+			// Best effort - don't fail if we can't post the rejection
+		}
 	}
 
 }

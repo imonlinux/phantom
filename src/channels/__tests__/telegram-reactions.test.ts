@@ -80,7 +80,8 @@ describe("TelegramChannel.setReaction", () => {
 
 	test("does NOT trip circuit breaker on 429 flood errors", async () => {
 		const channel = makeChannelWithMockApi(async () => {
-			throw new Error("429: Too Many Requests, retry after 5");
+			// P5.4: Use JSON format for retry_after to test parsing
+			throw new Error('429: Too Many Requests, {"retry_after": 1}');
 		});
 
 		const result = await channel.setReaction(123, 456, "👀");
@@ -141,5 +142,89 @@ describe("TelegramChannel.setReaction", () => {
 	test("declares reactions capability", () => {
 		const channel = new TelegramChannel({ botToken: "x" } as TelegramChannelConfig);
 		expect(channel.capabilities.reactions).toBe(true);
+	});
+});
+
+describe("TelegramChannel.setReaction (P5.4 retry)", () => {
+	test("retries on 429 Too Many Requests with retry_after", async () => {
+		let attempts = 0;
+		let callCount = 0;
+		const channel = makeChannelWithMockApi(async () => {
+			callCount++;
+			attempts++;
+			// First two attempts fail with 429
+			if (attempts <= 2) {
+				throw new Error('429: {"retry_after": 1} Too Many Requests');
+			}
+			// Third attempt succeeds
+			return undefined;
+		});
+
+		const result = await channel.setReaction(123, 456, "👀");
+
+		// Should succeed after retries
+		expect(result).toBe(true);
+		expect(callCount).toBe(3);
+	});
+
+	test("retries on 500 Internal Server Error with exponential backoff", async () => {
+		let attempts = 0;
+		let callCount = 0;
+		const timestamps: number[] = [];
+		const channel = makeChannelWithMockApi(async () => {
+			callCount++;
+			timestamps.push(Date.now());
+			attempts++;
+			// First two attempts fail with 500
+			if (attempts <= 2) {
+				throw new Error("500 Internal Server Error");
+			}
+			// Third attempt succeeds
+			return undefined;
+		});
+
+		const result = await channel.setReaction(123, 456, "👀");
+
+		// Should succeed after retries
+		expect(result).toBe(true);
+		expect(callCount).toBe(3);
+
+		// Verify exponential backoff (approximately)
+		// First retry: ~1000ms, second retry: ~2000ms
+		if (timestamps.length >= 3) {
+			const firstDelay = timestamps[1] - timestamps[0];
+			const secondDelay = timestamps[2] - timestamps[1];
+			// Allow some tolerance for test execution time
+			expect(firstDelay).toBeGreaterThan(900); // At least ~1s
+			expect(secondDelay).toBeGreaterThan(1800); // At least ~2s
+		}
+	}, 10_000); // 10s timeout for exponential backoff test
+
+	test("does not retry on 400 REACTION_INVALID (permanent error)", async () => {
+		let callCount = 0;
+		const channel = makeChannelWithMockApi(async () => {
+			callCount++;
+			throw new Error("400 REACTION_INVALID");
+		});
+
+		const result = await channel.setReaction(123, 456, "👀");
+
+		// Should fail immediately without retries
+		expect(result).toBe(false);
+		expect(callCount).toBe(1); // Only one attempt
+	});
+
+	test("gives up after max retries on persistent 429", async () => {
+		let callCount = 0;
+		const channel = makeChannelWithMockApi(async () => {
+			callCount++;
+			throw new Error('429: {"retry_after": 1} Too Many Requests');
+		});
+
+		const result = await channel.setReaction(123, 456, "👀");
+
+		// Should fail after max retries
+		expect(result).toBe(false);
+		expect(callCount).toBe(4); // Initial + 3 retries
 	});
 });

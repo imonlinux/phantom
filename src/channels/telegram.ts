@@ -151,6 +151,91 @@ export class TelegramChannel implements Channel {
 	// Telegram release the long-poll slot server-side.
 	private static readonly RECONNECT_STOP_DELAY_MS = 1_000;
 
+	// P5.4: Retry configuration for transient errors
+	private static readonly MAX_RETRIES = 3;
+	private static readonly BASE_BACKOFF_MS = 1_000;
+	private static readonly MAX_BACKOFF_MS = 10_000;
+
+	/**
+	 * P5.4: Retry wrapper for Telegram API calls that handles transient errors.
+	 * Detects 429 Too Many Requests (respects retry_after) and 5xx errors.
+	 * Uses exponential backoff for 5xx, fixed retry_after for 429.
+	 *
+	 * @param fn - The async function to retry
+	 * @param context - Description of the operation for logging
+	 * @returns The result of the function call
+	 * @throws The last error if all retries are exhausted
+	 */
+	private async withTelegramRetry<T>(
+		fn: () => Promise<T>,
+		context: string,
+	): Promise<T> {
+		let lastError: unknown;
+		for (let attempt = 0; attempt <= TelegramChannel.MAX_RETRIES; attempt++) {
+			try {
+				return await fn();
+			} catch (err: unknown) {
+				lastError = err;
+				const msg = err instanceof Error ? err.message : String(err);
+
+				// Check if this is a retryable error
+				const is429 = msg.includes("429") || msg.includes("Too Many Requests");
+				const is5xx = /^5\d\d/.test(msg);
+
+				if (!is429 && !is5xx) {
+					// Not a transient error, throw immediately
+					throw err;
+				}
+
+				// Final attempt failed, don't retry again
+				if (attempt === TelegramChannel.MAX_RETRIES) {
+					console.error(
+						`[telegram] ${context} failed after ${attempt} attempts: ${msg}`,
+					);
+					throw err;
+				}
+
+				// Calculate backoff delay
+				let delayMs: number;
+				if (is429) {
+					// Extract retry_after from error message if available
+					// Telegraf surfaces this in multiple formats:
+					// - "429: Too Many Requests, retry after 5"
+					// - "429: {"retry_after": 2} Too Many Requests"
+					let retryAfterMatch = msg.match(/"retry_after":\s*(\d+)/);
+					if (!retryAfterMatch) {
+						retryAfterMatch = msg.match(/retry after (\d+)/);
+					}
+					if (retryAfterMatch) {
+						delayMs = parseInt(retryAfterMatch[1], 10) * 1000;
+					} else {
+						// Default to exponential backoff if retry_after not found
+						delayMs = Math.min(
+							TelegramChannel.BASE_BACKOFF_MS * 2 ** (attempt + 1),
+							TelegramChannel.MAX_BACKOFF_MS,
+						);
+					}
+				} else {
+					// 5xx error: exponential backoff
+					delayMs = Math.min(
+						TelegramChannel.BASE_BACKOFF_MS * 2 ** (attempt + 1),
+						TelegramChannel.MAX_BACKOFF_MS,
+					);
+				}
+
+				console.warn(
+					`[telegram] ${context} attempt ${attempt + 1}/${TelegramChannel.MAX_RETRIES + 1} failed (${msg}); retrying after ${delayMs}ms`,
+				);
+
+				// Wait before retry
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+			}
+		}
+
+		// Should never reach here, but TypeScript needs it
+		throw lastError;
+	}
+
 	constructor(config: TelegramChannelConfig) {
 		this.config = config;
 	}
@@ -405,8 +490,13 @@ export class TelegramChannel implements Channel {
 		if (this.reactionDisabledChats.has(chatId)) return false;
 
 		const reaction = emoji ? [{ type: "emoji" as const, emoji }] : [];
+
 		try {
-			await this.bot.telegram.setMessageReaction(chatId, messageId, reaction);
+			// P5.4: Use retry wrapper for transient errors
+			await this.withTelegramRetry(
+				() => this.bot.telegram.setMessageReaction(chatId, messageId, reaction),
+				`setMessageReaction for chat ${chatId}`,
+			);
 			return true;
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -422,8 +512,7 @@ export class TelegramChannel implements Channel {
 				}
 				return false;
 			}
-			// Other errors (429 flood, network) are warned but don't trip the
-			// breaker — they're transient.
+			// Other errors after retries: log but return false (best-effort)
 			console.warn(`[telegram] setMessageReaction failed for chat ${chatId}: ${msg}`);
 			return false;
 		}
@@ -526,6 +615,7 @@ export class TelegramChannel implements Channel {
 				console.warn(
 					`[telegram] Failed to finalize progress message (${msg}); sending response as fresh message`,
 				);
+				// P5.4: Retry the fallback send
 				return this.editOrSendMessage(chatId, messageId, escaped, attachFeedback);
 			}
 		}
@@ -548,9 +638,14 @@ export class TelegramChannel implements Channel {
 		// Chunks 2..N-1: send as fresh messages (no buttons)
 		for (let i = 1; i < chunks.length - 1; i++) {
 			try {
-				const result = await this.bot.telegram.sendMessage(chatId, chunks[i], {
-					parse_mode: "MarkdownV2",
-				});
+				// P5.4: Use retry wrapper for final response sends
+				const result = await this.withTelegramRetry(
+					() =>
+						this.bot.telegram.sendMessage(chatId, chunks[i], {
+							parse_mode: "MarkdownV2",
+						}),
+					`send chunk ${i + 1}/${chunks.length}`,
+				);
 				lastMessageId = result.message_id;
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -563,15 +658,20 @@ export class TelegramChannel implements Channel {
 		const finalChunkIndex = chunks.length - 1;
 		const attachButtonsToFinal = attachFeedback && !isTruncated;
 		try {
-			const result = await this.bot.telegram.sendMessage(
-				chatId,
-				chunks[finalChunkIndex],
-				attachButtonsToFinal
-					? {
-							parse_mode: "MarkdownV2",
-							reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
-						}
-					: { parse_mode: "MarkdownV2" },
+			// P5.4: Use retry wrapper for final response send
+			const result = await this.withTelegramRetry(
+				() =>
+					this.bot.telegram.sendMessage(
+						chatId,
+						chunks[finalChunkIndex],
+						attachButtonsToFinal
+							? {
+									parse_mode: "MarkdownV2",
+									reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
+								}
+							: { parse_mode: "MarkdownV2" },
+					),
+				`send final chunk ${chunks.length}/${chunks.length}`,
 			);
 			lastMessageId = result.message_id;
 		} catch (err: unknown) {
@@ -596,15 +696,20 @@ export class TelegramChannel implements Channel {
 		if (!this.bot) throw new Error("Telegram bot not connected");
 
 		try {
-			const result = await this.bot.telegram.sendMessage(
-				chatId,
-				escaped,
-				attachFeedback
-					? {
-							parse_mode: "MarkdownV2",
-							reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
-						}
-					: { parse_mode: "MarkdownV2" },
+			// P5.4: Use retry wrapper for final response send
+			const result = await this.withTelegramRetry(
+				() =>
+					this.bot.telegram.sendMessage(
+						chatId,
+						escaped,
+						attachFeedback
+							? {
+								parse_mode: "MarkdownV2",
+								reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
+							}
+							: { parse_mode: "MarkdownV2" },
+					),
+				"send final response (fallback from edit)",
 			);
 			return result.message_id;
 		} catch (sendErr: unknown) {

@@ -413,3 +413,169 @@ describe("P5.5: Security hardening", () => {
 		expect(sentReplies[0].text).toContain("github.com/ghostwright/phantom");
 	});
 });
+
+describe("P6: Proactive intro", () => {
+	test("sends intro message on first connect when owner_chat_id is configured", async () => {
+		const { Database } = require("bun:sqlite");
+		const { runMigrations } = require("../../db/migrate.ts");
+		const db = new Database(":memory:");
+		runMigrations(db);
+
+		let introMessage: string | null = null;
+		let introChatId: number | null = null;
+
+		const mockBot = {
+			telegram: {
+				getMe: async () => ({ id: 123, username: "testbot" }),
+				sendMessage: async (chatId: number, text: string) => {
+					introMessage = text;
+					introChatId = chatId;
+					return { message_id: 1 };
+				},
+			},
+		};
+
+		const channel = new TelegramChannel({
+			botToken: "test-token",
+			ownerChatId: "123456789", // Owner's chat ID
+		});
+
+		// Inject mock bot and database
+		(channel as unknown as { bot: typeof mockBot }).bot = mockBot as unknown;
+		(channel as unknown as { db: Database }).db = db;
+
+		// Test sendProactiveIntroIfFirstRun directly
+		await channel["sendProactiveIntroIfFirstRun"]();
+
+		// Verify intro was sent
+		expect(introMessage).toContain("Phantom");
+		expect(introMessage).toContain("/help");
+		expect(introChatId).toBe(123456789);
+
+		// Verify database record was created
+		const row = db
+			.query("SELECT * FROM channel_intros WHERE channel_id = 'telegram'")
+			.get() as { channel_id: string; sent_to_chat_id: string } | undefined;
+		expect(row).toBeDefined();
+		expect(row?.channel_id).toBe("telegram");
+		expect(row?.sent_to_chat_id).toBe("123456789");
+
+		db.close();
+	});
+
+	test("does not send intro on subsequent connects", async () => {
+		const { Database } = require("bun:sqlite");
+		const { runMigrations } = require("../../db/migrate.ts");
+		const db = new Database(":memory:");
+		runMigrations(db);
+
+		// Simulate previous intro by inserting a record
+		db.run(
+			"INSERT INTO channel_intros (channel_id, intro_sent_at, sent_to_chat_id) VALUES (?, datetime('now'), ?)",
+			["telegram", "123456789"],
+		);
+
+		let introSent = false;
+
+		const mockBot = {
+			telegram: {
+				getMe: async () => ({ id: 123, username: "testbot" }),
+				sendMessage: async (_chatId: number, _text: string) => {
+					introSent = true;
+					return { message_id: 1 };
+				},
+			},
+		};
+
+		const channel = new TelegramChannel({
+			botToken: "test-token",
+			ownerChatId: "123456789",
+		});
+
+		// Inject mock bot and database
+		(channel as unknown as { bot: typeof mockBot }).bot = mockBot as unknown;
+		(channel as unknown as { db: Database }).db = db;
+
+		// Test sendProactiveIntroIfFirstRun directly
+		await channel["sendProactiveIntroIfFirstRun"]();
+
+		// Verify intro was NOT sent
+		expect(introSent).toBe(false);
+
+		db.close();
+	});
+
+	test("does not send intro when owner_chat_id is not configured", async () => {
+		const { Database } = require("bun:sqlite");
+		const { runMigrations } = require("../../db/migrate.ts");
+		const db = new Database(":memory:");
+		runMigrations(db);
+
+		let introSent = false;
+
+		const mockBot = {
+			telegram: {
+				getMe: async () => ({ id: 123, username: "testbot" }),
+				sendMessage: async (_chatId: number, _text: string) => {
+					introSent = true;
+					return { message_id: 1 };
+				},
+			},
+		};
+
+		const channel = new TelegramChannel({
+			botToken: "test-token",
+			// No ownerChatId configured
+		});
+
+		// Inject mock bot and database
+		(channel as unknown as { bot: typeof mockBot }).bot = mockBot as unknown;
+		(channel as unknown as { db: Database }).db = db;
+
+		// Test sendProactiveIntroIfFirstRun directly
+		await channel["sendProactiveIntroIfFirstRun"]();
+
+		// Verify intro was NOT sent
+		expect(introSent).toBe(false);
+
+		db.close();
+	});
+
+	test("gracefully handles intro send failures", async () => {
+		const { Database } = require("bun:sqlite");
+		const { runMigrations } = require("../../db/migrate.ts");
+		const db = new Database(":memory:");
+		runMigrations(db);
+
+		const mockBot = {
+			telegram: {
+				getMe: async () => ({ id: 123, username: "testbot" }),
+				sendMessage: async (_chatId: number, _text: string) => {
+					throw new Error("Network error");
+				},
+			},
+		};
+
+		const channel = new TelegramChannel({
+			botToken: "test-token",
+			ownerChatId: "123456789",
+		});
+
+		// Inject mock bot and database
+		(channel as unknown as { bot: typeof mockBot }).bot = mockBot as unknown;
+		(channel as unknown as { db: Database }).db = db;
+
+		// Test the sendProactiveIntroIfFirstRun method directly
+		// Call it and verify it doesn't throw - errors are caught and logged
+		try {
+			await channel["sendProactiveIntroIfFirstRun"]();
+			// If we get here, no exception was thrown (expected)
+			expect(true).toBe(true);
+		} catch (err) {
+			// If an exception was thrown, the test fails
+			expect.fail(`sendProactiveIntroIfFirstRun should not throw, but threw: ${err}`);
+		}
+
+		db.close();
+	});
+});

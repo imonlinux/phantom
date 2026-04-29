@@ -197,6 +197,8 @@ channels:
       - "${TELEGRAM_OWNER_USER_ID}"
     # - "${TELEGRAM_OWNER_USER_ID2}"   # uncomment when adding a second owner
     # - "${TELEGRAM_OWNER_USER_ID3}"
+    # owner_chat_id: "123456789"     # Optional: send proactive intro on first startup
+    # rejection_reply: "Custom message"  # Optional: override default rejection message
 ```
 
 Behavior with access control enabled:
@@ -223,6 +225,24 @@ or
 \`\`\`
 [telegram] No access control configured — all users can interact with the bot
 \`\`\`
+
+### Proactive intro message
+
+When you first set up Phantom on Telegram, you may want it to send you a welcome message to confirm it's connected and listening. Set `owner_chat_id` to your Telegram numeric user ID:
+
+\`\`\`yaml
+channels:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    owner_chat_id: "123456789"  # Your Telegram user ID
+\`\`\`
+
+On first startup, Phantom will send you this DM:
+
+> "Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do."
+
+The intro is only sent once per channel - tracked in the database to avoid re-sending on restart. If you don't set `owner_chat_id`, no intro message is sent (silent startup).
 
 ### Features
 

@@ -12,3 +12,11 @@ slack:
 #  talk_server: ${NEXTCLOUD_TALK_SERVER}
 #  room_token: ${NEXTCLOUD_ROOM_TOKEN}
 #  webhook_path: /nextcloud/webhook
+
+# telegram:
+#   enabled: true
+#   bot_token: ${TELEGRAM_BOT_TOKEN}
+#   enable_message_reactions: false  # opt-in for reaction-as-feedback in groups
+#   owner_user_ids: []  # Empty array = allow everyone, or ["123456789"] for owner-only access
+#   rejection_reply: null  # Optional custom rejection message for non-owners
+#   owner_chat_id: "123456789"  # Optional: send proactive intro on first startup

@@ -389,4 +389,13 @@ export const MIGRATIONS: string[] = [
     // that timeout 5 times in a row are moved to evolution_queue_poison
     // regardless of their retry_count.
     "ALTER TABLE evolution_queue ADD COLUMN consecutive_timeouts INTEGER NOT NULL DEFAULT 0",
+
+	// P6: Proactive intro for Telegram (and other channels).
+	// Tracks which channels have sent their first-run welcome message.
+	// One row per channel. The intro_sent_at timestamp prevents re-sending on restart.
+	`CREATE TABLE IF NOT EXISTS channel_intros (
+		channel_id TEXT PRIMARY KEY,
+		intro_sent_at TEXT,
+		sent_to_chat_id TEXT
+	)`,
 ];

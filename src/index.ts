@@ -330,12 +330,16 @@ async function main(): Promise<void> {
 	// Register Telegram channel
 	let telegramChannel: TelegramChannel | null = null;
 	if (channelsConfig?.telegram?.enabled && channelsConfig.telegram.bot_token) {
-		telegramChannel = new TelegramChannel({
-			botToken: channelsConfig.telegram.bot_token,
-			enableMessageReactions: channelsConfig.telegram.enable_message_reactions,
-			ownerUserIds: channelsConfig.telegram.owner_user_ids,
-			rejectionReply: channelsConfig.telegram.rejection_reply,
-		});
+		telegramChannel = new TelegramChannel(
+			{
+				botToken: channelsConfig.telegram.bot_token,
+				enableMessageReactions: channelsConfig.telegram.enable_message_reactions,
+				ownerUserIds: channelsConfig.telegram.owner_user_ids,
+				rejectionReply: channelsConfig.telegram.rejection_reply,
+				ownerChatId: channelsConfig.telegram.owner_chat_id,
+			},
+			db, // P6: Pass database for intro tracking
+		);
 		router.register(telegramChannel);
 		console.log("[phantom] Telegram channel registered");
 	}

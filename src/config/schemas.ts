@@ -104,6 +104,10 @@ export const TelegramChannelConfigSchema = z.object({
 	// P5.5: Optional custom rejection message for non-owners in DMs.
 	// Defaults to Phantom's standard message. Useful for forks and private deployments.
 	rejection_reply: z.string().optional(),
+	// P6: Optional owner chat ID for proactive first-run intro message.
+	// When set, sends a welcome message on first startup. Typically the owner's
+	// Telegram numeric user ID. Intro tracked in channel_intros table to prevent re-sending.
+	owner_chat_id: z.string().regex(/^\d+$/, "Telegram chat ID must be numeric (e.g., '123456789')").optional(),
 });
 
 export const EmailChannelConfigSchema = z.object({

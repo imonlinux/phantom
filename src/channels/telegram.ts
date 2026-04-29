@@ -13,6 +13,7 @@
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
 import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
+import { Database } from "bun:sqlite";
 
 type TelegrafBot = {
 	launch: (opts?: { allowedUpdates?: string[] }) => Promise<void>;
@@ -83,6 +84,15 @@ export type TelegramChannelConfig = {
 	 * internal support contact information.
 	 */
 	rejectionReply?: string;
+	/**
+	 * P6: Optional owner chat ID for proactive first-run intro message.
+	 * When set, the bot sends a welcome message on first startup:
+	 * "Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do."
+	 * This is typically the owner's Telegram user ID (numeric, as a string).
+	 * The intro is only sent once per channel - tracked in the channel_intros table.
+	 * If not set, no intro message is sent (silent startup).
+	 */
+	ownerChatId?: string;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -121,6 +131,7 @@ export class TelegramChannel implements Channel {
 	private messageHandler: ((message: InboundMessage) => Promise<void>) | null = null;
 	private connectionState: ConnectionState = "disconnected";
 	private config: TelegramChannelConfig;
+	private db: Database | null = null; // P6: Database for intro tracking
 	private typingTimers = new Map<number, ReturnType<typeof setInterval>>();
 
 	// P2.1: Per-chat circuit breaker. When setMessageReaction returns 400
@@ -245,8 +256,9 @@ export class TelegramChannel implements Channel {
 		throw lastError;
 	}
 
-	constructor(config: TelegramChannelConfig) {
+	constructor(config: TelegramChannelConfig, db: Database | null = null) {
 		this.config = config;
+		this.db = db; // P6: Database for intro tracking
 
 		// P5.5: Validate owner ID format at construction (defense-in-depth)
 		if (config.ownerUserIds) {
@@ -369,6 +381,10 @@ export class TelegramChannel implements Channel {
 			this.reconnectAttempts = 0;
 			this.startHealthCheck();
 			console.log("[telegram] Bot connected via long polling");
+
+			// P6: Send proactive intro on first startup if owner_chat_id is configured
+			await this.sendProactiveIntroIfFirstRun();
+
 			return true;
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -783,6 +799,46 @@ export class TelegramChannel implements Channel {
 		}
 		if (this.rejectedUsers.has(senderId)) return "ignore";
 		return "reject_dm";
+	}
+
+	/**
+	 * P6: Send proactive intro message on first startup if owner_chat_id is configured.
+	 * The intro is only sent once per channel - tracked in the channel_intros table.
+	 * This method is called after the bot successfully connects.
+	 */
+	private async sendProactiveIntroIfFirstRun(): Promise<void> {
+		const { ownerChatId } = this.config;
+		if (!ownerChatId) return; // No owner chat configured, skip
+		if (!this.db) return; // No database available, skip
+
+		try {
+			// Check if intro was already sent
+			const row = this.db
+				.query("SELECT intro_sent_at FROM channel_intros WHERE channel_id = 'telegram'")
+				.get() as { intro_sent_at?: string } | undefined;
+
+			if (row?.intro_sent_at) {
+				console.log("[telegram] Intro message already sent on previous startup");
+				return;
+			}
+
+			// Send intro message
+			const introText =
+				"Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.";
+			await this.bot?.telegram.sendMessage(parseInt(ownerChatId, 10), introText);
+
+			// Mark as sent
+			this.db.run(
+				"INSERT OR REPLACE INTO channel_intros (channel_id, intro_sent_at, sent_to_chat_id) VALUES (?, datetime('now'), ?)",
+				["telegram", ownerChatId],
+			);
+
+			console.log(`[telegram] Sent intro message to chat ${ownerChatId}`);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[telegram] Failed to send intro message: ${msg}`);
+			// Don't throw - this is a best-effort welcome message
+		}
 	}
 
 	/**

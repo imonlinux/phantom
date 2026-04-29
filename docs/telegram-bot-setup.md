@@ -93,7 +93,9 @@ Long-polling is the simplest mode and works without a public URL.
 
 ```bash
 TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-TELEGRAM_OWNER_USER_IDS="123456789"
+TELEGRAM_OWNER_USER_ID="123456789"
+#TELEGRAM_OWNER_USER_ID2="192837645"
+#TELEGRAM_OWNER_USER_ID3="987654321"
 TELEGRAM_ENABLE_MESSAGE_REACTIONS="true"
 TELEGRAM_SEND_INTRO="true"
 ```
@@ -104,19 +106,20 @@ TELEGRAM_SEND_INTRO="true"
 channels:
   telegram:
     enabled: true
-    bot_token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+    bot_token: ${TELEGRAM_BOT_TOKEN}
     owner_user_ids:
-      - 123456789
-    enable_message_reactions: true
-    send_intro: true
+      - ${TELEGRAM_OWNER_USER_ID}
+#     - ${TELEGRAM_OWNER_USER_ID2}
+#     - ${TELEGRAM_OWNER_USER_ID3}
+    enable_message_reactions: ${TELEGRAM_ENABLE_MESSAGE_REACTIONS}
+    send_intro: ${TELEGRAM_SEND_INTRO}
 ```
 
 **Configuration fields:**
 - `bot_token` - Bot token from BotFather
-- `owner_user_ids` - List of Telegram user IDs allowed to interact with the bot
+- `owner_user_ids` - List of Telegram user IDs allowed to interact with the bot, remove comments for additional allowed IDs
 - `enable_message_reactions` - Enable emoji status updates (default: false)
 - `send_intro` - Send proactive introduction message (default: false)
-- `session_window_minutes` - Time window for session coalescing (default: 30)
 
 ### Restart Phantom
 
@@ -168,7 +171,10 @@ Save this secret - you'll need it for configuration.
 TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
 TELEGRAM_WEBHOOK_URL="https://phantom.example.com/telegram/webhook"
 TELEGRAM_WEBHOOK_SECRET="your_generated_secret_here"
-TELEGRAM_OWNER_USER_IDS="123456789"
+TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP="false"
+TELEGRAM_OWNER_USER_ID="123456789"
+#TELEGRAM_OWNER_USER_ID2="192837645"
+#TELEGRAM_OWNER_USER_ID3="987654321"
 TELEGRAM_ENABLE_MESSAGE_REACTIONS="true"
 TELEGRAM_SEND_INTRO="true"
 ```
@@ -179,14 +185,16 @@ TELEGRAM_SEND_INTRO="true"
 channels:
   telegram:
     enabled: true
-    bot_token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-    webhook_url: "https://phantom.example.com/telegram/webhook"
-    webhook_secret: "your_generated_secret_here"
-    verify_webhook_source_ip: false
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    webhook_url: ${TELEGRAM_WEBHOOK_URL}
+    webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
+    verify_webhook_source_ip: &{TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP}
     owner_user_ids:
-      - 123456789
-    enable_message_reactions: true
-    send_intro: true
+      - ${TELEGRAM_OWNER_USER_ID}
+#     - ${TELEGRAM_OWNER_USER_ID2}
+#     - ${TELEGRAM_OWNER_USER_ID3}
+    enable_message_reactions: ${TELEGRAM_ENABLE_MESSAGE_REACTIONS}
+    send_intro: ${TELEGRAM_SEND_INTRO}
 ```
 
 **Additional webhook configuration fields:**
@@ -593,18 +601,6 @@ Phantom uses emoji reactions to show bot status:
 | 🨄 | Stall (hard) | Permanent failure, giving up |
 
 **Note:** Telegram has a limited emoji allowlist. Phantom uses substitutions that work within Telegram's constraints.
-
-### Session Coalescing
-
-Phantom groups messages within a time window into a single conversation session:
-
-```yaml
-channels:
-  telegram:
-    session_window_minutes: 30  # Default: 30 minutes
-```
-
-This improves context awareness for multi-turn interactions.
 
 ### Custom Rejection Reply
 

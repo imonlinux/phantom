@@ -241,6 +241,16 @@ export class NextcloudChannel implements Channel {
 		return Response.json({ error: "Not found" }, { status: 404 });
 	}
 
+	/**
+	 * Handle incoming webhook from Nextcloud Talk.
+	 *
+	 * IMPORTANT: Returns 200 OK immediately and processes asynchronously to avoid
+	 * webhook timeouts. Agent sessions can take 50-80+ seconds to complete, but
+	 * webhooks should return quickly to prevent timeouts and retries.
+	 *
+	 * Security checks (signature, nonce, size limits) happen synchronously before
+	 * the async processing to ensure rejected requests never reach the agent.
+	 */
 	private async handleWebhook(req: Request): Promise<Response> {
 		const random = req.headers.get("x-nextcloud-talk-random");
 		const signature = req.headers.get("x-nextcloud-talk-signature");
@@ -281,6 +291,7 @@ export class NextcloudChannel implements Channel {
 		}
 
 		// Fix #1: Add nonce to cache after successful signature verification
+		// This happens BEFORE async processing to prevent race conditions
 		this.addNonce(random);
 
 		let payload: NextcloudWebhookPayload;
@@ -290,12 +301,37 @@ export class NextcloudChannel implements Channel {
 			return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 		}
 
-		const result = await this.processWebhookPayload(payload);
-		if (result.error) {
-			return Response.json({ error: result.error }, { status: result.status ?? 500 });
-		}
+		// CRITICAL: Process asynchronously and return 200 immediately to avoid webhook timeouts.
+		// Agent sessions take 50-80+ seconds, but webhooks should return within seconds.
+		// The nonce cache prevents duplicate processing if Nextcloud retries.
+		this.processWebhookPayloadAsync(payload, random);
 
 		return Response.json({ status: "ok" });
+	}
+
+	/**
+	 * Process webhook payload asynchronously without blocking the HTTP response.
+	 * Logs errors but never throws to prevent unhandled promise rejections.
+	 *
+	 * @param payload - Validated Nextcloud webhook payload
+	 * @param nonce - Request nonce for logging purposes
+	 */
+	private processWebhookPayloadAsync(payload: NextcloudWebhookPayload, nonce: string): void {
+		const nonceLog = nonce.slice(0, 8) + "..."; // First 8 chars for logging
+		// Fire-and-forget: process without awaiting. Errors are logged but not thrown.
+		this.processWebhookPayload(payload)
+			.then((result) => {
+				if (result.error) {
+					console.warn(`[nextcloud] Async webhook ${nonceLog} processing error: ${result.error}`);
+				} else {
+					console.log(`[nextcloud] Async webhook ${nonceLog} processing completed`);
+				}
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[nextcloud] Async webhook ${nonceLog} processing failed: ${msg}`);
+				// Don't throw - this is a background task and the response was already sent
+			});
 	}
 
 	private async processWebhookPayload(payload: NextcloudWebhookPayload): Promise<{ status?: number; error?: string }> {

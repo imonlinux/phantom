@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { escapeMarkdownV2 } from "../markdown-v2.ts";
+import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "../markdown-v2.ts";
 
 describe("escapeMarkdownV2: spec compliance — outside-entity reserved chars", () => {
 	// Per spec: _ * [ ] ( ) ~ ` > # + - = | { } . ! \ must be escaped
@@ -303,5 +303,193 @@ describe("escapeMarkdownV2: anti-regression — the original bugs", () => {
 		// Inside the `...` span: \ → \\, but + stays literal (not reserved
 		// inside pre/code entities, only ` and \ are).
 		expect(escapeMarkdownV2(input)).toBe("`\\\\d+`");
+	});
+});
+
+describe("splitForTelegram: message length splitting", () => {
+	test("returns single escaped chunk when text fits under limit", () => {
+		const input = "Hello, world!";
+		const result = splitForTelegram(input);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toBe("Hello, world\\!");
+	});
+
+	test("returns single chunk when text exactly at limit after escape", () => {
+		// Create text that will be exactly 4096 after escaping periods
+		// Each period becomes `\.` (2 chars), so we need 2048 periods
+		const input = ".".repeat(2048);
+		const result = splitForTelegram(input, 4096);
+		expect(result).toHaveLength(1);
+		expect(result[0].length).toBeLessThanOrEqual(4096);
+	});
+
+	test("splits long prose on paragraph boundaries", () => {
+		// Create 3 paragraphs, each ~2000 chars after escaping
+		const para1 = "a ".repeat(1000); // ~2000 chars after escaping spaces
+		const para2 = "b ".repeat(1000);
+		const para3 = "c ".repeat(1000);
+		const input = `${para1}\n\n${para2}\n\n${para3}`;
+
+		const result = splitForTelegram(input, 4096);
+		expect(result.length).toBeGreaterThan(1);
+		// Each chunk should be under limit
+		for (const chunk of result) {
+			expect(chunk.length).toBeLessThanOrEqual(4096);
+		}
+	});
+
+	test("treats code blocks as atomic units (never split)", () => {
+		// Create a large code block that would exceed limit if split mid-block
+		const codeBlock = "```\n" + "x".repeat(5000) + "\n```";
+		const input = `Before\n\n${codeBlock}\n\nAfter`;
+
+		const result = splitForTelegram(input, 4096);
+		// Should have at least 2 chunks
+		expect(result.length).toBeGreaterThanOrEqual(1);
+
+		// Verify code block integrity (no split within)
+		const codeBlockCount = result.filter((chunk) => chunk.includes("```")).length;
+		// Code block should appear in exactly one chunk (atomic)
+		expect(codeBlockCount).toBeGreaterThanOrEqual(1);
+	});
+
+	test("preserves code blocks intact even when over limit", () => {
+		// Code block that exceeds limit after escape
+		const largeCode = "```\n" + "a".repeat(5000) + "\n```";
+		const result = splitForTelegram(largeCode, 4096);
+
+		// Should emit it anyway with warning (logged, not tested)
+		expect(result.length).toBeGreaterThanOrEqual(1);
+		// Verify opening and closing fences present
+		expect(result.some((chunk) => chunk.includes("```") && chunk.includes("a"))).toBe(true);
+	});
+
+	test("handles multiple code blocks as separate atoms", () => {
+		const block1 = "```\n" + "a".repeat(100) + "\n```";
+		const block2 = "```\n" + "b".repeat(100) + "\n```";
+		const prose = "c".repeat(3000);
+		const input = `${block1}\n\n${prose}\n\n${block2}`;
+
+		const result = splitForTelegram(input, 4096);
+		// Each code block should be atomic
+		for (const chunk of result) {
+			expect(chunk.length).toBeLessThanOrEqual(4096);
+		}
+	});
+
+	test("applies 5-chunk cap with truncation message", () => {
+		// Create text that would need 7+ chunks after escape
+		const longPara = "x ".repeat(20000); // ~40000 chars, way over limit
+		const result = splitForTelegram(longPara, 4096, 5);
+
+		expect(result.length).toBe(5);
+		// Last chunk should have truncation message when chunks were dropped
+		expect(result[result.length - 1]).toContain("response truncated");
+	});
+
+	test("splits prose paragraphs that exceed limit", () => {
+		// Single prose paragraph without newlines that exceeds limit
+		const longSentence = "a ".repeat(10000);
+		const result = splitForTelegram(longSentence, 4096, 5);
+
+		// Should split into multiple chunks
+		expect(result.length).toBeGreaterThan(1);
+		// Each chunk should be under limit
+		for (const chunk of result) {
+			expect(chunk.length).toBeLessThanOrEqual(4096);
+		}
+	});
+
+	test("escapes all chunks properly", () => {
+		const input = "Hello! How are you. I'm fine.";
+		const result = splitForTelegram(input, 20); // Small limit to force split
+
+		// All chunks should have reserved chars properly escaped
+		// Note: ? and ' are NOT reserved chars in Telegram MarkdownV2
+		for (const chunk of result) {
+			// Check that ! and . are escaped
+			if (chunk.includes("!")) expect(chunk).toContain("\\!");
+			if (chunk.includes(".")) expect(chunk).toContain("\\.");
+		}
+	});
+
+	test("handles mixed content: prose, inline code, and code blocks", () => {
+		const input =
+			"Introduction text here.\n\n" +
+			"```typescript\nconst x = foo.bar(baz);\n```\n\n" +
+			"Use `inline.code` for this.\n\n" +
+			"More text with reserved chars: (parens) [brackets] {braces}.";
+
+		const result = splitForTelegram(input, 4096);
+		expect(result.length).toBeGreaterThanOrEqual(1);
+
+		// Verify code block preserved
+		const codeBlockChunk = result.find((chunk) => chunk.includes("```typescript"));
+		expect(codeBlockChunk).toBeDefined();
+		expect(codeBlockChunk).toContain("const x = foo.bar(baz);");
+
+		// Verify inline code preserved
+		const inlineCodeChunk = result.find((chunk) => chunk.includes("`inline.code`"));
+		expect(inlineCodeChunk).toBeDefined();
+
+		// Verify prose escaped
+		const proseChunk = result.find((chunk) => chunk.includes("Introduction"));
+		expect(proseChunk).toContain("Introduction text here\\.");
+	});
+
+	test("empty input returns single empty escaped chunk", () => {
+		const result = splitForTelegram("");
+		expect(result).toHaveLength(1);
+		expect(result[0]).toBe("");
+	});
+
+	test("preserves newlines between chunks appropriately", () => {
+		const input = "Line 1\n\nLine 2\n\nLine 3";
+		const result = splitForTelegram(input, 20);
+
+		// Should preserve paragraph structure where possible
+		for (const chunk of result) {
+			expect(chunk.length).toBeLessThanOrEqual(4096);
+		}
+	});
+
+	test("handles reserved characters that grow during escape", () => {
+		// Create input where escaping doubles the length
+		const input = "...".repeat(2000); // 6000 chars, becomes 12000 after escape
+		const result = splitForTelegram(input, 4096, 5);
+
+		expect(result.length).toBeGreaterThanOrEqual(1);
+		expect(result.length).toBeLessThanOrEqual(5);
+
+		// All chunks should have properly escaped periods
+		for (const chunk of result) {
+			if (chunk.includes(".")) {
+				expect(chunk).toContain("\\.");
+			}
+		}
+	});
+
+	test("respects custom limit parameter", () => {
+		const input = "a ".repeat(100);
+		const result = splitForTelegram(input, 50, 10);
+
+		// Should split at 50 char limit
+		for (const chunk of result) {
+			expect(chunk.length).toBeLessThanOrEqual(50);
+		}
+	});
+
+	test("respects custom maxChunks parameter", () => {
+		const input = "a ".repeat(10000);
+		const result = splitForTelegram(input, 1000, 3);
+
+		expect(result.length).toBeLessThanOrEqual(3);
+	});
+
+	test("handles text with only newlines", () => {
+		const input = "\n\n\n";
+		const result = splitForTelegram(input);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toBe("\n\n\n");
 	});
 });

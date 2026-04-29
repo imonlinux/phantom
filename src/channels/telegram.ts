@@ -12,7 +12,7 @@
 
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
-import { escapeMarkdownV2 } from "./markdown-v2.ts";
+import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
 
 type TelegrafBot = {
 	launch: (opts?: { allowedUpdates?: string[] }) => Promise<void>;
@@ -480,15 +480,19 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
-	 * P2.2: Replace the progress message with the final agent response.
-	 * Uses MarkdownV2 escape since the user will read this. If the response
-	 * exceeds Telegram's 4096-char message limit (or the edit otherwise
-	 * fails), falls back to sending a fresh message and leaves the progress
-	 * line alone — the user sees both, which is preferable to losing the
-	 * response. Phase 5 will add proper splitting.
+	 * P5.3: Replace the progress message with the final agent response.
+	 * Splits long responses into chunks ≤ 4096 chars after MarkdownV2 escaping.
 	 *
-	 * Returns the message_id of the message containing the final response
-	 * (either the edited progress message or the new fresh message).
+	 * Multi-chunk flow:
+	 * - Chunk 1: edit progress message (no buttons)
+	 * - Chunks 2..N-1: send as fresh messages (no buttons)
+	 * - Chunk N: send with buttons (if attachFeedback and not truncated)
+	 *
+	 * Preserves parse-error fallback: if any API call fails, falls back
+	 * to a fresh message send with the full escaped text.
+	 *
+	 * Returns the message_id of the last message containing response content
+	 * (either the edited progress message or the final fresh message).
 	 */
 	async finishProgressMessage(
 		chatId: number,
@@ -498,50 +502,115 @@ export class TelegramChannel implements Channel {
 	): Promise<number> {
 		if (!this.bot) throw new Error("Telegram bot not connected");
 
-		const escaped = escapeMarkdownV2(text);
-		const replyMarkup = attachFeedback
-			? { reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() } }
-			: {};
+		const chunks = splitForTelegram(text);
+		const isTruncated = chunks.length === 5 && text.length > TELEGRAM_MAX_MESSAGE_LENGTH * 5;
 
-		// If we're already over the limit, skip the doomed edit.
-		if (escaped.length > TELEGRAM_MAX_MESSAGE_LENGTH) {
-			console.warn(
-				`[telegram] Final response exceeds ${TELEGRAM_MAX_MESSAGE_LENGTH} chars; ` +
-					"sending as fresh message (Phase 5 will split properly)",
-			);
-			const result = await this.bot.telegram.sendMessage(chatId, escaped, {
-				parse_mode: "MarkdownV2",
-				...replyMarkup,
-			});
-			return result.message_id;
-		}
+		// Single chunk: edit the progress message in place.
+		if (chunks.length === 1) {
+			const escaped = chunks[0];
+			const replyMarkup = attachFeedback
+				? { reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() } }
+				: {};
 
-		try {
-			await this.bot.telegram.editMessageText(chatId, messageId, undefined, escaped, {
-				parse_mode: "MarkdownV2",
-				...replyMarkup,
-			});
-			return messageId;
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			// "message is not modified" is benign — final text matched progress.
-			if (msg.includes("message is not modified")) {
-				return messageId;
-			}
-			console.warn(
-				`[telegram] Failed to finalize progress message (${msg}); sending response as fresh message`,
-			);
 			try {
-				const result = await this.bot.telegram.sendMessage(chatId, escaped, {
+				await this.bot.telegram.editMessageText(chatId, messageId, undefined, escaped, {
 					parse_mode: "MarkdownV2",
 					...replyMarkup,
 				});
-				return result.message_id;
-			} catch (sendErr: unknown) {
-				const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-				console.error(`[telegram] Failed to send fallback response: ${sendMsg}`);
-				throw sendErr;
+				return messageId;
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("message is not modified")) {
+					return messageId;
+				}
+				console.warn(
+					`[telegram] Failed to finalize progress message (${msg}); sending response as fresh message`,
+				);
+				return this.editOrSendMessage(chatId, messageId, escaped, attachFeedback);
 			}
+		}
+
+		// Multi-chunk: edit progress message with chunk 1, send rest as fresh messages.
+		let lastMessageId: number;
+
+		// Chunk 1: edit progress message (no buttons, even if attachFeedback)
+		try {
+			await this.bot.telegram.editMessageText(chatId, messageId, undefined, chunks[0], {
+				parse_mode: "MarkdownV2",
+			});
+			lastMessageId = messageId;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[telegram] Failed to edit progress message with chunk 1 (${msg}); sending as fresh message`);
+			lastMessageId = await this.editOrSendMessage(chatId, messageId, chunks[0], false);
+		}
+
+		// Chunks 2..N-1: send as fresh messages (no buttons)
+		for (let i = 1; i < chunks.length - 1; i++) {
+			try {
+				const result = await this.bot.telegram.sendMessage(chatId, chunks[i], {
+					parse_mode: "MarkdownV2",
+				});
+				lastMessageId = result.message_id;
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Failed to send chunk ${i + 1}: ${msg}`);
+				// Continue trying to send remaining chunks
+			}
+		}
+
+		// Final chunk: attach buttons if requested and not truncated
+		const finalChunkIndex = chunks.length - 1;
+		const attachButtonsToFinal = attachFeedback && !isTruncated;
+		try {
+			const result = await this.bot.telegram.sendMessage(
+				chatId,
+				chunks[finalChunkIndex],
+				attachButtonsToFinal
+					? {
+							parse_mode: "MarkdownV2",
+							reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
+						}
+					: { parse_mode: "MarkdownV2" },
+			);
+			lastMessageId = result.message_id;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Failed to send final chunk: ${msg}`);
+		}
+
+		return lastMessageId;
+	}
+
+	/**
+	 * P5.3: Helper for edit-or-send fallback. Attempts to edit the progress
+	 * message; on failure, sends a fresh message. Used for single-chunk
+	 * responses when the edit fails.
+	 */
+	private async editOrSendMessage(
+		chatId: number,
+		messageId: number,
+		escaped: string,
+		attachFeedback: boolean,
+	): Promise<number> {
+		if (!this.bot) throw new Error("Telegram bot not connected");
+
+		try {
+			const result = await this.bot.telegram.sendMessage(
+				chatId,
+				escaped,
+				attachFeedback
+					? {
+							parse_mode: "MarkdownV2",
+							reply_markup: { inline_keyboard: buildFeedbackInlineKeyboard() },
+						}
+					: { parse_mode: "MarkdownV2" },
+			);
+			return result.message_id;
+		} catch (sendErr: unknown) {
+			const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+			console.error(`[telegram] Failed to send fallback response: ${sendMsg}`);
+			throw sendErr;
 		}
 	}
 

@@ -122,13 +122,13 @@ describe("TelegramChannel.finishProgressMessage", () => {
 		expect(editCalls[0][4].reply_markup).toBeUndefined();
 	});
 
-	test("falls back to fresh send when message exceeds 4096 chars", async () => {
+	test("splits long messages into chunks (P5.3)", async () => {
 		const editCalls: any[] = [];
 		const sendCalls: any[] = [];
 		const { channel } = makeChannelWithMockApi({
 			editMessageText: mock(async (...args: any[]) => {
 				editCalls.push(args);
-				return undefined;
+				return { ok: true };
 			}),
 			sendMessage: mock(async (...args: any[]) => {
 				sendCalls.push(args);
@@ -136,11 +136,16 @@ describe("TelegramChannel.finishProgressMessage", () => {
 			}),
 		});
 
-		const longText = "a".repeat(5000);
+		// Create text that will be ~5000 chars after escaping
+		// Using periods which escape to \. (2 chars each)
+		const longText = ". ".repeat(2500); // 2500 ". " pairs = 5000 chars
 		const id = await channel.finishProgressMessage(123, 100, longText);
-		expect(id).toBe(999);
-		expect(editCalls.length).toBe(0);
-		expect(sendCalls.length).toBe(1);
+
+		// P5.3: Long text is split into chunks
+		// Chunk 1 edits progress message, chunk 2+ are fresh sends
+		expect(editCalls.length).toBeGreaterThanOrEqual(1);
+		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+		expect(id).toBe(999); // Last chunk message_id
 	});
 
 	test("returns same id on 'message is not modified' (treated as success)", async () => {
@@ -214,19 +219,31 @@ describe("TelegramChannel.finishProgressMessage", () => {
 		expect(editCalls[0][4].reply_markup).toBeUndefined();
 	});
 
-	test("attaches feedback buttons in fresh-send fallback path (oversize)", async () => {
+	test("attaches feedback buttons to final chunk when splitting long messages (P5.3)", async () => {
+		const editCalls: any[] = [];
 		const sendCalls: any[] = [];
 		const { channel } = makeChannelWithMockApi({
+			editMessageText: mock(async (...args: any[]) => {
+				editCalls.push(args);
+				return { ok: true };
+			}),
 			sendMessage: mock(async (...args: any[]) => {
 				sendCalls.push(args);
 				return { message_id: 999 };
 			}),
 		});
 
-		const longText = "a".repeat(5000);
+		// Create text that will be ~5000 chars after escaping
+		const longText = ". ".repeat(2500); // 2500 ". " pairs = 5000 chars
 		await channel.finishProgressMessage(123, 100, longText, true);
-		expect(sendCalls.length).toBe(1);
-		const options = sendCalls[0][2];
+
+		// P5.3: Long text is split, with buttons only on final chunk
+		expect(editCalls.length).toBeGreaterThanOrEqual(1); // Chunk 1 edits progress (no buttons)
+		expect(sendCalls.length).toBeGreaterThanOrEqual(1); // Chunk 2+ are fresh sends
+
+		// Check that the final chunk (fresh send) has feedback buttons
+		const finalSendIndex = sendCalls.length - 1;
+		const options = sendCalls[finalSendIndex][2];
 		expect(options.reply_markup).toBeDefined();
 		expect(options.reply_markup.inline_keyboard[0].length).toBe(3);
 	});

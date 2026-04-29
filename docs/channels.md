@@ -143,23 +143,95 @@ For **private** channels, the bot must be invited with `/invite @Phantom` before
 
 ## Telegram
 
-Bot interface via long polling. No public URL required.
+Bot interface with two transport modes: **long-polling** (default) and **webhook** (optional, opt-in). No public URL required for long-polling mode.
 
-### Setup
+### Transport Modes
+
+**Long-polling (default):**
+- Bot polls Telegram servers for updates
+- Works behind NAT/firewalls
+- No HTTPS certificate required
+- Simplest setup for development/testing
+
+**Webhook (optional):**
+- Telegram pushes updates to your Phantom instance
+- Requires public HTTPS URL with valid certificate
+- More efficient for production deployments
+- Lower latency than polling
+- Reuses existing HTTP infrastructure
+
+### Minimum Telegram Bot API Version Requirements
+
+| Feature | Minimum Bot API Version | Notes |
+|---------|------------------------|-------|
+| Basic messaging | 5.0 | `/newbot` creates bots with API 7.0+ by default |
+| Inline keyboards | 5.0 | `reply_markup` with inline keyboard support |
+| Message editing | 5.0 | `editMessageText` API |
+| setMessageReaction | 7.0 | Emoji reactions on bot messages |
+| message_reaction updates | 7.0 | Event for receiving user reactions |
+| Webhook transport | 5.0 | `setWebhook` API |
+
+**Important:** Reaction feedback requires Bot API 7.0+. If your bot was created before this version, you may need to update it via BotFather.
+
+### BotFather Setup
+
+#### For Long-Polling Mode (Default)
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram
 2. Create a new bot with `/newbot`
 3. Save the bot token
 
-### Configuration
+#### For Webhook Mode
+
+1. Follow the long-polling setup steps above
+2. Your Phantom instance must have a public HTTPS URL with a valid SSL certificate
+3. The webhook endpoint is `https://your-phantom-host/telegram/webhook`
+4. See the webhook configuration section below for details
+
+### Configuration (Long-Polling Mode)
 
 ```yaml
-telegram:
-  enabled: true
-  bot_token: ${TELEGRAM_BOT_TOKEN}
+channels:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
 ```
 
-### Access control
+### Configuration (Webhook Mode)
+
+```yaml
+channels:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    webhook_url: https://phantom.example.com/telegram/webhook
+    webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
+    verify_webhook_source_ip: false  # Optional defense-in-depth
+```
+
+**Webhook configuration fields:**
+- `webhook_url` - Your public HTTPS URL where Telegram will send updates
+- `webhook_secret` - Optional token for verifying webhook requests are from Telegram
+- `verify_webhook_source_ip` - Optional: verify requests come from Telegram's IP ranges (defense-in-depth)
+
+**Set the webhook secret as an environment variable:**
+
+```bash
+# In .env
+TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)
+```
+
+**Webhook endpoint requirements:**
+- Public HTTPS URL with valid SSL certificate (self-signed certificates are NOT accepted by Telegram)
+- Endpoint path: `/telegram/webhook` (hardcoded, not configurable)
+- POST requests from Telegram servers
+- Maximum request body: 64 KB (enforced by Phantom)
+
+**Telegram webhook source IP ranges** (for `verify_webhook_source_ip: true`):
+- `149.154.160.0/20`
+- `91.108.4.0/22`
+
+### Access Control
 
 By default, Phantom's Telegram bot will respond to anyone who messages it.
 For a personal bot, you almost certainly want to lock this down to just
@@ -176,32 +248,46 @@ additional Telegram users IDs to allow them access to your bot.
 
 Then add it to your .env file:
 
-```
+```bash
 # ========================
 # OPTIONAL: Telegram
 # ========================
 TELEGRAM_BOT_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TELEGRAM_OWNER_USER_ID=xxxxxxxxxxx
-#TELEGRAM_OWNER_USER_ID2=
-#TELEGRAM_OWNER_USER_ID3=
+TELEGRAM_OWNER_USER_ID2=
+TELEGRAM_OWNER_USER_ID3=
+TELEGRAM_WEBHOOK_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Then update the config/channels.yaml file accordingly.
+Then update the config/channels.yaml file accordingly:
 
-```
+```yaml
 channels:
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     owner_user_ids:
       - "${TELEGRAM_OWNER_USER_ID}"
-    # - "${TELEGRAM_OWNER_USER_ID2}"   # uncomment when adding a second owner
-    # - "${TELEGRAM_OWNER_USER_ID3}"
-    # owner_chat_id: "123456789"     # Optional: send proactive intro on first startup
+      - "${TELEGRAM_OWNER_USER_ID2}"   # Additional owner
+    # send_intro: true  # Optional: send welcome message on first startup
     # rejection_reply: "Custom message"  # Optional: override default rejection message
+    # enable_message_reactions: true  # Optional: enable reaction feedback in groups
+    # webhook_url: https://phantom.example.com/telegram/webhook  # Optional: webhook mode
+    # webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
+    # verify_webhook_source_ip: false  # Optional: verify webhook source IP
 ```
 
-Behavior with access control enabled:
+**Configuration fields:**
+- `bot_token` - Bot token from BotFather (required)
+- `owner_user_ids` - Array of numeric Telegram user IDs authorized to interact with the bot
+- `send_intro` - Send welcome message on first startup (default: false)
+- `rejection_reply` - Custom rejection message for non-owners in DMs
+- `enable_message_reactions` - Enable emoji reaction feedback in groups (default: false)
+- `webhook_url` - Public HTTPS URL for webhook mode (optional)
+- `webhook_secret` - Secret token for webhook verification (required with webhook_url)
+- `verify_webhook_source_ip` - Verify requests come from Telegram IPs (default: false)
+
+**Behavior with access control enabled:**
 
 - **Owners in 1:1 DMs:** full access, normal interaction
 - **Owners in groups:** full access (they're trusted regardless of room)
@@ -216,28 +302,28 @@ lock you out — fix the YAML and restart. There's no lockable state.
 
 The startup log confirms which mode you're in:
 
-\`\`\`
+```
 [telegram] Access control active: 1 owner ID(s) configured
-\`\`\`
+```
 
 or
 
-\`\`\`
+```
 [telegram] No access control configured — all users can interact with the bot
-\`\`\`
+```
 
-### Proactive intro message
+### Proactive Intro Message
 
 When you first set up Phantom on Telegram, you may want it to send you a welcome message to confirm it's connected and listening. Enable `send_intro` to send a welcome message to the first owner in `owner_user_ids`:
 
-\`\`\`yaml
+```yaml
 channels:
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     owner_user_ids: ["123456789"]  # Your Telegram user ID
     send_intro: true  # Enable proactive intro
-\`\`\`
+```
 
 On first startup, Phantom will send you this DM:
 
@@ -247,17 +333,52 @@ The intro is only sent once per channel - tracked in the database to avoid re-se
 
 ### Features
 
-- Inline keyboard buttons
+**Core capabilities:**
+- Inline keyboard buttons (feedback, actions)
 - Persistent typing indicator (re-fires every 4s to stay active)
 - Message editing for progressive updates
 - MarkdownV2 formatting with code block preservation
+- Message splitting for long messages (>4096 chars)
 - Commands: `/start`, `/status`, `/help`
 
-### Reaction-based feedback (groups only, opt-in)
+**Status reactions (Telegram emoji substitutes):**
+- 👀 (eyes) - Queued
+- 🤔 (thinking) - Processing (substitute for 🧠)
+- 👨‍💻 (coder) - Using code tools
+- 👌 (OK) - Done (substitute for ✅)
+- 😱 (scream) - Error (substitute for ⚠️)
+- 🥱 (yawning face) - Soft stall
+- 🏁 (chequered flag) - Hard stall
+
+**Note:** Telegram has a limited emoji allowlist (~70 emoji). The substitutes above provide the best experience within Telegram's constraints.
+
+### Progressive Updates & Tool Activity
+
+Phantom provides real-time progress updates during tool execution:
+
+1. **"Working on it..."** - Initial response when starting tool use
+2. **Live updates** - Each tool activity updates the message
+3. **Final response** - Complete answer replaces the working message
+
+Updates happen via message editing, so you see one evolving message instead of multiple messages.
+
+### Feedback Collection
+
+Phantom collects feedback in two ways:
+
+**Inline keyboard buttons (works everywhere):**
+- [👍 Helpful] [👎 Not helpful] [🤔 Could be better]
+- Appears under each response
+- Works in 1:1 DMs and groups
+- Primary feedback mechanism
+
+**Reaction-based feedback (groups only, opt-in):**
 
 Phantom can collect feedback signals from emoji reactions to its messages
 (👍 / ❤ / 🔥 → positive, 👎 → negative). This feature is **only available
 in shared groups where the bot has been promoted to administrator**.
+
+**DM vs Group Constraint:**
 
 It does not work in 1:1 DMs. Telegram requires the bot to be a chat
 admin to deliver `message_reaction` updates, and 1:1 DMs have no admin
@@ -266,13 +387,13 @@ buttons under each response.
 
 To enable in groups:
 
-\`\`\`yaml
+```yaml
 channels:
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     enable_message_reactions: true
-\`\`\`
+```
 
 Then, in the Telegram group:
 
@@ -282,13 +403,122 @@ Then, in the Telegram group:
 
 You'll see this on startup:
 
-\`\`\`
+```
 [telegram] Reaction-as-feedback enabled; bot must be admin in groups
 to receive reaction events. Has no effect in 1:1 DMs.
-\`\`\`
+```
 
 After restart, reactions on the bot's messages flow as feedback signals
 through the same evolution engine that processes Slack reaction feedback.
+
+### Security Features (Webhook Mode)
+
+When webhook mode is enabled, Phantom implements multiple security layers:
+
+**1. Secret token verification:**
+- Shared secret configured via `webhook_secret`
+- Verified via `X-Telegram-Bot-Api-Secret-Token` header
+- 401 Unauthorized on mismatch
+
+**2. Update deduplication:**
+- LRU cache for `update_id` (1000 entries, 5 minute TTL)
+- Prevents replay attacks from duplicate webhook deliveries
+- Same proven pattern as NextCloud's nonce cache
+
+**3. Body size limit:**
+- 64 KB maximum request body size
+- Checked via `Content-Length` header before parsing
+- 413 Payload Too Large on exceeded
+
+**4. Source IP verification (optional):**
+- Checks requests come from Telegram's published IP ranges
+- Defense-in-depth (secret_token is the primary security mechanism)
+- Enabled via `verify_webhook_source_ip: true`
+
+### Error Handling & Retry
+
+**Transient error handling (all modes):**
+- 429 Too Many Requests: respects `retry_after` header
+- 5xx server errors: exponential backoff (1s → 2s → 4s → 8s)
+- Maximum 3 retry attempts
+- Logs retry attempts with context
+
+**Circuit breaker (reactions):**
+- Per-chat circuit breaker for reaction errors
+- 400 REACTION_INVALID disables reactions for that chat (rest of session)
+- Prevents repeated failures on unsupported clients
+- Logged once per chat when disabled
+
+### Webhook vs Long-Polling Mode Tradeoffs
+
+**Long-polling (default):**
+- ✅ No public URL required
+- ✅ Works behind NAT/firewalls
+- ✅ Simpler setup
+- ✅ No SSL certificate needed
+- ❌ Uses long-polling slot (can have contention issues)
+- ❌ Health check polling required
+
+**Webhook (optional):**
+- ✅ No long-polling slot contention
+- ✅ Faster update delivery (push vs pull)
+- ✅ No health check needed (push-based)
+- ✅ More efficient for production
+- ❌ Requires public HTTPS URL
+- ❌ Requires valid SSL certificate
+- ❌ More complex setup
+
+Choose long-polling for development/testing. Choose webhook for production deployments that already have a public HTTPS URL.
+
+### Commands
+
+Available bot commands (send in Telegram):
+
+- `/start` - Introduction to Phantom
+- `/status` - Connection status and capabilities
+- `/help` - List available commands
+
+### Troubleshooting
+
+**Bot not receiving messages (long-polling):**
+- Check bot token is correct in `.env`
+- Verify `enabled: true` in `channels.yaml`
+- Check Phantom logs for connection errors
+- Try restarting Phantom
+
+**Bot not receiving messages (webhook):**
+- Verify webhook URL is publicly accessible
+- Check SSL certificate is valid (not self-signed)
+- Verify webhook_secret matches between Phantom and Telegram
+- Check firewall allows incoming POST to `/telegram/webhook`
+- Check Phantom logs for webhook errors
+
+**Reactions not working:**
+- Verify bot is admin in the group (required for message_reaction events)
+- Check `enable_message_reactions: true` in config
+- Restart Phantom after enabling
+- Does not work in 1:1 DMs (Telegram limitation)
+
+**Rate limiting (429 errors):**
+- Phantom implements retry with `retry_after` respect
+- If frequent, consider spacing out requests
+- Check for other bots using same API token
+
+**"Bot responds to itself" loop:**
+- Verify TELEGRAM_BOT_ID is configured in Phantom (webhook mode only)
+- Check logs for self-filtering: "[telegram] Ignoring message from self"
+- Bot ID is shown in Nextcloud setup output
+
+**Webhook mode not activating:**
+- Verify `webhook_url` is set in config
+- Check Phantom logs for webhook registration confirmation
+- Verify secret token matches between config and Telegram
+- Check that previous webhook was deleted (Telegram doesn't allow both)
+
+**Long-polling slot contention:**
+- If process was killed uncleanly, slot may be held for ~90 seconds
+- Wait for timeout or use webhook mode instead
+- Multiple Phantom instances will contend for the same slot
 
 ## Email
 

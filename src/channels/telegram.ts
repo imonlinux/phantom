@@ -520,6 +520,12 @@ export class TelegramChannel implements Channel {
 			return { status: 503, body: "Service Unavailable" };
 		}
 
+		// P8: Check for duplicate update_id (replay protection)
+		if (updateId !== undefined && this.isUpdateDuplicate(updateId)) {
+			console.log(`[telegram] Ignoring duplicate webhook update ${updateId}`);
+			return { status: 200, body: "OK" }; // Return 200 so Telegram stops retrying
+		}
+
 		try {
 			// Process the update using Telegraf's handleUpdate
 			await this.processWebhookUpdate(update);

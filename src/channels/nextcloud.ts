@@ -637,6 +637,7 @@ export class NextcloudChannel implements Channel {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
+						"Accept": "application/json",  // Request JSON response, not XML
 						"OCS-APIRequest": "true",
 						"X-Nextcloud-Talk-Bot-Random": random,
 						"X-Nextcloud-Talk-Bot-Signature": sig,

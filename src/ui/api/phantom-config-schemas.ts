@@ -15,6 +15,7 @@ const ChannelsUiSchema = z
 	.object({
 		slack: ChannelEnabledSchema.default({}),
 		telegram: ChannelEnabledSchema.default({}),
+		nextcloud: ChannelEnabledSchema.default({}),
 		email: ChannelEnabledSchema.default({}),
 		webhook: ChannelEnabledSchema.default({}),
 	})
@@ -89,6 +90,7 @@ export const PhantomConfigPutSchema = z
 			.object({
 				slack: z.object({ enabled: z.boolean() }).strict().optional(),
 				telegram: z.object({ enabled: z.boolean() }).strict().optional(),
+				nextcloud: z.object({ enabled: z.boolean() }).strict().optional(),
 				email: z.object({ enabled: z.boolean() }).strict().optional(),
 				webhook: z.object({ enabled: z.boolean() }).strict().optional(),
 			})

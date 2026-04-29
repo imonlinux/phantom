@@ -202,8 +202,8 @@ export class NextcloudChannel implements Channel {
 			throw new Error(`Invalid conversation ID (no room token): ${conversationId}`);
 		}
 
-		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId);
-		if (!success) {
+		const result = await this.postToNextcloud(roomToken, message.text, message.replyToId);
+		if (!result.success) {
 			throw new Error("Failed to post message to Nextcloud");
 		}
 
@@ -597,7 +597,7 @@ export class NextcloudChannel implements Channel {
 		return hmac.digest("hex");
 	}
 
-	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<boolean> {
+	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<{ success: boolean; messageId?: string }> {
 		// Fix #17: Validate and sanitize talkServer config
 		let talkServer = this.config.talkServer.trim();
 		// Remove scheme if present
@@ -645,7 +645,21 @@ export class NextcloudChannel implements Channel {
 				});
 
 				if (res.ok) {
-					return true;
+					// Parse response to extract message ID for progressive updates
+					try {
+						const responseData = await res.json();
+						// OCS API format: { ocs: { meta: {...}, data: {...} } }
+						// The message ID should be in ocs.data.id
+						const messageId = responseData?.ocs?.data?.id;
+						if (typeof messageId === "number" || typeof messageId === "string") {
+							return { success: true, messageId: String(messageId) };
+						}
+						// Fallback: return success without message ID
+						return { success: true, messageId: undefined };
+					} catch {
+						// JSON parse failed, return success without message ID
+						return { success: true, messageId: undefined };
+					}
 				}
 
 				// Handle specific error codes
@@ -660,7 +674,7 @@ export class NextcloudChannel implements Channel {
 					} else {
 						// Final attempt - all retries exhausted
 						console.error(`[nextcloud] Rate limited, all ${maxRetries} retries exhausted`);
-						return false;
+						return { success: false, messageId: undefined };
 					}
 				}
 
@@ -676,7 +690,7 @@ export class NextcloudChannel implements Channel {
 				// Non-retryable error
 				const text = await res.text();
 				console.error(`[nextcloud] Bot API error: ${res.status} – ${text.slice(0, 200)}`);
-				return false;
+				return { success: false, messageId: undefined };
 			} catch (err) {
 				lastError = err instanceof Error ? err : new Error(String(err));
 				if (attempt < maxRetries - 1) {
@@ -690,7 +704,7 @@ export class NextcloudChannel implements Channel {
 
 		// All retries exhausted
 		console.error("[nextcloud] All retries exhausted for postToNextcloud:", lastError?.message);
-		return false;
+		return { success: false, messageId: undefined };
 	}
 
 	// Helper method for retry delays

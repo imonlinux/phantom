@@ -103,17 +103,16 @@ export function createNextcloudInteractionFactory(
 			progressStream = createProgressStream({
 				adapter: {
 					postMessage: async (text) => {
-						// Post initial "Working on it..." message
-						const success = await nc.postToNextcloud(rt, text);
-						// Return a tracking ID for the progress message
-						return success ? `progress_${mid}_${Date.now()}` : "";
+						// Post initial "Working on it..." message and return real message ID
+						const result = await nc.postToNextcloud(rt, text);
+						// Return the real Nextcloud message ID for editing
+						return result.messageId || "";
 					},
 					updateMessage: async (msgId, updatedText) => {
-						// Update the progress message with new content
-						// For Nextcloud, we post new messages since editing is complex
-						// This can be improved later to use the editMessage API
-						if (msgId.startsWith("progress_")) {
-							await nc.postToNextcloud(rt, updatedText);
+						// Update the progress message using the editMessage API
+						// Only attempt update if we have a valid message ID
+						if (msgId) {
+							await nc.editMessage(rt, msgId, updatedText);
 						}
 					},
 				},
@@ -127,9 +126,11 @@ export function createNextcloudInteractionFactory(
 					const enableFeedback = config?.enableFeedback !== false;
 					if (enableFeedback) {
 						const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
-						await nc.postToNextcloud(rt, text + feedbackPrompt);
+						const { success } = await nc.postToNextcloud(rt, text + feedbackPrompt);
+						if (!success) console.warn("[nextcloud] Failed to post feedback prompt");
 					} else {
-						await nc.postToNextcloud(rt, text);
+						const { success } = await nc.postToNextcloud(rt, text);
+						if (!success) console.warn("[nextcloud] Failed to post final response");
 					}
 				},
 			});
@@ -178,16 +179,17 @@ export function createNextcloudInteractionFactory(
 				const enableFeedback = config?.enableFeedback !== false;
 				if (enableFeedback) {
 					const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
-					await nc.postToNextcloud(rt, text + feedbackPrompt);
+					const { success } = await nc.postToNextcloud(rt, text + feedbackPrompt);
+					return success;
 				} else {
-					await nc.postToNextcloud(rt, text);
+					const { success } = await nc.postToNextcloud(rt, text);
+					return success;
 				}
-				return true;
 			},
 
 			dispose(): void {
 				statusReactions.dispose();
 			},
 		};
-	}
-  } 
+	};
+}

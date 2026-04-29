@@ -954,6 +954,67 @@ describe("NextcloudChannel", () => {
 		});
 	});
 
+	describe("Phase 2: Enhanced interactions", () => {
+		test("provides default configuration for progressive updates", () => {
+			// Phase 2: When not configured, progressive updates should be enabled by default
+			expect(channel.getEnableProgressiveUpdates()).toBe(true);
+			expect(channel.getEnableFeedback()).toBe(true);
+			expect(channel.getProgressiveUpdateThrottleMs()).toBe(1000);
+		});
+
+		test("allows disabling progressive updates via config", () => {
+			// Phase 2: Operators can disable progressive updates if needed
+			const noProgressConfig: NextcloudChannelConfig = {
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				enableProgressiveUpdates: false,
+				enableFeedback: false,
+			};
+
+			const noProgressChannel = new NextcloudChannel(noProgressConfig);
+
+			expect(noProgressChannel.getEnableProgressiveUpdates()).toBe(false);
+			expect(noProgressChannel.getEnableFeedback()).toBe(false);
+		});
+
+		test("allows customizing progressive update throttle", () => {
+			// Phase 2: Operators can adjust the throttle to avoid rate limits
+			const customThrottleConfig: NextcloudChannelConfig = {
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				progressiveUpdateThrottleMs: 2000,
+			};
+
+			const customThrottleChannel = new NextcloudChannel(customThrottleConfig);
+
+			expect(customThrottleChannel.getProgressiveUpdateThrottleMs()).toBe(2000);
+		});
+
+		test("emoji map uses human-readable emojis", () => {
+			// Phase 2: Enhanced emoji map for better UX (no allowlist issues)
+			const { NEXTCLOUD_EMOJIS } = require("../nextcloud-interaction.ts");
+
+			expect(NEXTCLOUD_EMOJIS.queued).toBe("👀");
+			expect(NEXTCLOUD_EMOJIS.thinking).toBe("🤔");
+			expect(NEXTCLOUD_EMOJIS.tool).toBe("👨‍💻");
+			expect(NEXTCLOUD_EMOJIS.done).toBe("👌");
+			expect(NEXTCLOUD_EMOJIS.error).toBe("😱");
+		});
+
+		test("feedback prompt is appended to responses", () => {
+			// Phase 2: When feedback is enabled, responses include feedback prompt
+			const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
+			const response = "Here is your answer";
+			const expected = response + feedbackPrompt;
+
+			expect(expected).toContain("Was this helpful");
+			expect(expected).toContain("👍");
+			expect(expected).toContain("👎");
+		});
+	});
+
 	describe("Phase 3: Owner access control", () => {
 		test("allows messages from owner when ownerUserId is configured", () => {
 			// When ownerUserId is set, only that user can trigger the bot

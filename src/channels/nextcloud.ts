@@ -22,6 +22,10 @@ export type NextcloudChannelConfig = {
 	sessionWindowMinutes?: number;
 	botId?: string; // Fix #12: Bot's own ID for self-filtering to prevent bot loops
 	ownerUserId?: string; // Phase 3: Owner access control - only this user can trigger the bot
+	// Phase 2: Enhanced interactions
+	enableProgressiveUpdates?: boolean; // Enable progressive "Working on it..." updates
+	enableFeedback?: boolean; // Enable feedback collection via reactions
+	progressiveUpdateThrottleMs?: number; // Throttle progressive updates (ms)
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -212,12 +216,95 @@ export class NextcloudChannel implements Channel {
 		};
 	}
 
+	// Phase 2: Edit a previously posted message (for progressive updates)
+	async editMessage(roomToken: string, messageId: string, newText: string): Promise<boolean> {
+		// Fix #17: Validate and sanitize talkServer config
+		let talkServer = this.config.talkServer.trim();
+		if (talkServer.startsWith("http://")) {
+			talkServer = talkServer.slice(7);
+		} else if (talkServer.startsWith("https://")) {
+			talkServer = talkServer.slice(8);
+		}
+		if (talkServer.endsWith("/")) {
+			talkServer = talkServer.slice(0, -1);
+		}
+
+		// Fix #17: URL-encode parameters
+		const encodedRoomToken = encodeURIComponent(roomToken);
+		const encodedMessageId = encodeURIComponent(String(messageId));
+		const url = `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${encodedRoomToken}/message/${encodedMessageId}`;
+
+		const bodyStr = JSON.stringify({ message: newText });
+		const random = randomUUID().replace(/-/g, "");
+		const sig = this.signRequest(random, newText);
+
+		// Phase 2: Retry/backoff for message editing
+		const maxRetries = 2;
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			try {
+				const res = await fetch(url, {
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						"OCS-APIRequest": "true",
+						"X-Nextcloud-Talk-Bot-Random": random,
+						"X-Nextcloud-Talk-Bot-Signature": sig,
+					},
+					body: bodyStr,
+				});
+
+				if (res.ok) {
+					return true;
+				}
+
+				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
+					// Server error - retry with exponential backoff plus jitter
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
+					console.log(`[nextcloud] Message edit error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+					continue;
+				}
+
+				// Non-retryable error
+				const text = await res.text();
+				console.error(`[nextcloud] Message edit error: ${res.status} – ${text.slice(0, 200)}`);
+				return false;
+			} catch (err) {
+				if (attempt < maxRetries - 1) {
+					const base = 1000 * Math.pow(2, attempt);
+					const delayMs = Math.floor(base * (0.5 + Math.random()));
+					console.log(`[nextcloud] Network error editing message, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					await this.sleep(delayMs);
+				} else {
+					console.error("[nextcloud] Network error editing message:", err);
+					return false;
+				}
+			}
+		}
+
+		return false;
+	}
+
 	onMessage(handler: (message: InboundMessage) => Promise<void>): void {
 		this.messageHandler = handler;
 	}
 
 	isConnected(): boolean {
 		return this.connectionState === "connected";
+	}
+
+	// Phase 2: Configuration getters for enhanced interactions
+	getEnableProgressiveUpdates(): boolean {
+		return this.config.enableProgressiveUpdates ?? true;
+	}
+
+	getEnableFeedback(): boolean {
+		return this.config.enableFeedback ?? true;
+	}
+
+	getProgressiveUpdateThrottleMs(): number {
+		return this.config.progressiveUpdateThrottleMs ?? 1000;
 	}
 
 	getConnectionState(): ConnectionState {

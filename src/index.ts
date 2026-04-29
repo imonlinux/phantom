@@ -404,6 +404,11 @@ async function main(): Promise<void> {
 			port: channelsConfig.nextcloud.port,
 			botId: channelsConfig.nextcloud.bot_id,
 			sessionWindowMinutes: channelsConfig.nextcloud.session_window_minutes,
+			ownerUserId: channelsConfig.nextcloud.owner_user_id,
+			// Phase 2: Enhanced interactions configuration
+			enableProgressiveUpdates: channelsConfig.nextcloud.enable_progressive_updates,
+			enableFeedback: channelsConfig.nextcloud.enable_feedback,
+			progressiveUpdateThrottleMs: channelsConfig.nextcloud.progressive_update_throttle_ms,
 		}, runtime.sessionStore);
 		router.register(nextcloudChannel);
 		console.log("[phantom] Nextcloud channel registered");
@@ -525,7 +530,12 @@ async function main(): Promise<void> {
 	// used to live inside router.onMessage.
 	const interactionRegistry = new ChannelInteractionRegistry();
 	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
-	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel));
+	// Phase 2: Pass Nextcloud configuration to interaction factory
+	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel, {
+		enableProgressiveUpdates: channelsConfig.nextcloud?.enable_progressive_updates,
+		enableFeedback: channelsConfig.nextcloud?.enable_feedback,
+		progressiveUpdateThrottleMs: channelsConfig.nextcloud?.progressive_update_throttle_ms,
+	}));
 	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));
 
 	const conversationMessages = new Map<string, { user: string[]; assistant: string[] }>();

@@ -158,6 +158,13 @@ export const NextcloudChannelConfigSchema = z
 		// Matches Nextcloud user ID (from webhook payload actor.id field)
 		// When omitted, bot responds to everyone (backward compatible)
 		owner_user_id: z.string().optional(),
+		// Phase 2: Enhanced interactions
+		// Enable progressive "Working on it..." updates during agent processing
+		enable_progressive_updates: z.boolean().default(true),
+		// Enable feedback collection via reaction prompts (👍/👎)
+		enable_feedback: z.boolean().default(true),
+		// Throttle progressive updates to avoid rate limits (milliseconds)
+		progressive_update_throttle_ms: z.number().int().min(500).max(10000).default(1000),
 	})
 	.strict();
 

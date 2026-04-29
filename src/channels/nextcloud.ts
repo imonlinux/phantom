@@ -647,8 +647,12 @@ export class NextcloudChannel implements Channel {
 				if (res.ok) {
 					// Parse response to extract message ID for progressive updates
 					try {
-						const responseData = await res.json();
-						console.log("[nextcloud] Post message response:", JSON.stringify(responseData).slice(0, 200));
+						// First, get raw text to see what we received
+						const rawText = await res.text();
+						console.log("[nextcloud] Raw response (200 chars):", rawText.slice(0, 200));
+
+						const responseData = JSON.parse(rawText);
+						console.log("[nextcloud] Parsed JSON response:", JSON.stringify(responseData).slice(0, 200));
 						// OCS API format: { ocs: { meta: {...}, data: {...} } }
 						// The message ID should be in ocs.data.id
 						const messageId = responseData?.ocs?.data?.id;

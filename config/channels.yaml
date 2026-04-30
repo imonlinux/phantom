@@ -6,17 +6,28 @@ slack:
   # default_user_id: U04ABC123
   owner_user_id: ${OWNER_SLACK_USER_ID}
 
-# nextcloud:
-#  enabled: true
-#  shared_secret: ${NEXTCLOUD_SHARED_SECRET}
-#  talk_server: ${NEXTCLOUD_TALK_SERVER}
-#  room_token: ${NEXTCLOUD_ROOM_TOKEN}
-#  webhook_path: /nextcloud/webhook
+nextcloud:
+  enabled: true
+  shared_secret: ${NEXTCLOUD_SHARED_SECRET}
+  talk_server: ${NEXTCLOUD_TALK_SERVER}
+  room_token: ${NEXTCLOUD_ROOM_TOKEN}
+#  owner_user_id: ${NEXTCLOUD_USER_ID}
+  bot_id: '${NEXTCLOUD_BOT_ID}'
+  webhook_path: ${NEXTCLOUD_WEBHOOK_PATH}
+  session_window_minutes: ${NEXTCLOUD_SESSION_TIMEOUT}
+  enable_progressive_updates: ${NEXTCLOUD_PROGRESSIVE_UPDATES}
+  enable_feedback: ${NEXTCLOUD_FEEDBACK}
 
-# telegram:
-#   enabled: true
-#   bot_token: ${TELEGRAM_BOT_TOKEN}
-#   enable_message_reactions: false  # opt-in for reaction-as-feedback in groups
-#   owner_user_ids: []  # Empty array = allow everyone, or ["123456789"] for owner-only access
-#   rejection_reply: null  # Optional custom rejection message for non-owners
-#   send_intro: false  # Set to true to send proactive welcome message to first owner on startup
+telegram:
+  enabled: true
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  webhook_url: ${TELEGRAM_WEBHOOK_URL}
+  webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
+  verify_webhook_source_ip: ${TELEGRAM_VERIFY_WEBHOOK_SOURCE_IP}
+  owner_user_ids:
+    - '${TELEGRAM_OWNER_USER_ID}'
+#     - '${TELEGRAM_OWNER_USER_ID2}'
+#     - '${TELEGRAM_OWNER_USER_ID3}'
+  enable_message_reactions: ${TELEGRAM_ENABLE_MESSAGE_REACTIONS}
+  send_intro: ${TELEGRAM_SEND_INTRO}
+

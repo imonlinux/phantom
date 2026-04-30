@@ -409,6 +409,8 @@ async function main(): Promise<void> {
 			enableProgressiveUpdates: channelsConfig.nextcloud.enable_progressive_updates,
 			enableFeedback: channelsConfig.nextcloud.enable_feedback,
 			progressiveUpdateThrottleMs: channelsConfig.nextcloud.progressive_update_throttle_ms,
+			// Phase 6: Proactive intro configuration
+			sendIntro: channelsConfig.nextcloud.send_intro,
 		}, runtime.sessionStore);
 		router.register(nextcloudChannel);
 		console.log("[phantom] Nextcloud channel registered");

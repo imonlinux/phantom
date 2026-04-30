@@ -10,8 +10,10 @@
  */
 
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
+import { Database } from "bun:sqlite";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import type { SessionStore } from "../agent/session-store.ts";
+import { emitFeedback } from "./feedback.ts";
 
 export type NextcloudChannelConfig = {
 	sharedSecret: string;
@@ -26,6 +28,7 @@ export type NextcloudChannelConfig = {
 	enableProgressiveUpdates?: boolean; // Enable progressive "Working on it..." updates
 	enableFeedback?: boolean; // Enable feedback collection via reactions
 	progressiveUpdateThrottleMs?: number; // Throttle progressive updates (ms)
+	sendIntro?: boolean; // Phase 6: Enable proactive intro message
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -50,6 +53,7 @@ interface NextcloudWebhookPayload {
 		content?: string;
 		name?: string;
 		parentMessageId?: number | string;
+		reaction?: string; // Phase 2: For reaction events
 	};
 	target?: {
 		id: string;
@@ -79,6 +83,8 @@ export class NextcloudChannel implements Channel {
 	private sessionStore: SessionStore | null = null;
 	// Phase 3: Owner access control
 	private rejectedUsers = new Set<string>();
+	// Phase 6: Database for intro tracking
+	private db: Database | null = null;
 
 	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
@@ -89,6 +95,22 @@ export class NextcloudChannel implements Channel {
 			sessionWindowMinutes: config.sessionWindowMinutes ?? 30,
 		};
 		this.sessionStore = sessionStore ?? null;
+
+		// Phase 6: Initialize database for intro tracking
+		try {
+			this.db = new Database("data/phantom.db");
+			// Ensure table exists (should already exist from migrations)
+			this.db.exec(`
+				CREATE TABLE IF NOT EXISTS channel_intros (
+					channel_id TEXT PRIMARY KEY,
+					intro_sent_at TEXT,
+					sent_to_chat_id TEXT
+				)
+			`);
+		} catch (err) {
+			console.warn("[nextcloud] Failed to initialize database for intro tracking:", err);
+			this.db = null;
+		}
 	}
 
 	async connect(): Promise<void> {
@@ -112,6 +134,11 @@ export class NextcloudChannel implements Channel {
 
 			this.connectionState = "connected";
 			console.log(`[nextcloud] Webhook server listening on :${port}${webhookPath}`);
+
+			// Phase 6: Send proactive intro if enabled and first run
+			if (this.config.sendIntro) {
+				await this.sendProactiveIntroIfFirstRun();
+			}
 		} catch (err: unknown) {
 			this.connectionState = "error";
 			const msg = err instanceof Error ? err.message : String(err);
@@ -139,6 +166,12 @@ export class NextcloudChannel implements Channel {
 			this.nonceCachePruneTimer = null;
 		}
 		this.nonceCache.clear();
+
+		// Close database connection
+		if (this.db) {
+			this.db.close();
+			this.db = null;
+		}
 
 		console.log("[nextcloud] Disconnected");
 	}
@@ -459,6 +492,12 @@ export class NextcloudChannel implements Channel {
 		const roomName = target?.name ?? "room";
 
 		console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`);
+
+		// Handle reaction events for feedback
+		if (type === "React") {
+			this.handleReactionFeedback(payload, roomToken);
+			return { status: 200, error: undefined };
+		}
 
 		// Only process new messages
 		if (type !== "Create") {
@@ -799,7 +838,10 @@ export class NextcloudChannel implements Channel {
 
 	private async rejectNonOwner(userId: string, roomToken: string): Promise<void> {
 		// Only send the rejection once per user to avoid spam
-		if (this.rejectedUsers.has(userId)) return;
+		if (this.rejectedUsers.has(userId)) {
+			console.log(`[nextcloud] Silently ignoring repeat non-owner message from ${userId}`);
+			return;
+		}
 		this.rejectedUsers.add(userId);
 
 		const rejectionMessage =
@@ -808,8 +850,127 @@ export class NextcloudChannel implements Channel {
 
 		try {
 			await this.postToNextcloud(roomToken, rejectionMessage);
-		} catch {
+			console.log(`[nextcloud] Sent rejection message to non-owner ${userId}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[nextcloud] Failed to send rejection to ${userId}: ${msg}`);
 			// Best effort - don't fail if we can't post the rejection
+		}
+	}
+
+	private handleReactionFeedback(payload: NextcloudWebhookPayload, roomToken: string): void {
+		const actorId = payload.actor?.id;
+		const messageId = payload.object?.id;
+		const reaction = payload.object?.reaction;
+
+		if (!actorId || !messageId || !reaction) {
+			console.log("[nextcloud] Reaction event missing required fields");
+			return;
+		}
+
+		// Gate reactions by owner (when owner_user_id is configured)
+		if (!this.isOwner(actorId)) {
+			console.log(`[nextcloud] Ignoring reaction from non-owner ${actorId}`);
+			return;
+		}
+
+		// Map emojis to feedback types (Slack-compatible rich mapping)
+		// Slack uses: +1, thumbsup, heart, white_check_mark (positive) and -1, thumbsdown, x (negative)
+		const reactionMap: Record<string, "positive" | "negative"> = {
+			// Positive reactions (thumbs up)
+			"👍": "positive",
+			"👍🏻": "positive",
+			"👍🏼": "positive",
+			"👍🏽": "positive",
+			"👍🏾": "positive",
+			"👍🏿": "positive",
+			// Positive reactions (heart)
+			"❤️": "positive",
+			"❤": "positive",
+			"🧡": "positive",
+			"💛": "positive",
+			"💚": "positive",
+			"💙": "positive",
+			"💜": "positive",
+			"🖤": "positive",
+			"🤍": "positive",
+			"🤎": "positive",
+			"💔": "positive",
+			"❣️": "positive",
+			// Positive reactions (check mark)
+			"✅": "positive",
+			"☑️": "positive",
+			"✔️": "positive",
+			// Negative reactions (thumbs down)
+			"👎": "negative",
+			"👎🏻": "negative",
+			"👎🏼": "negative",
+			"👎🏽": "negative",
+			"👎🏾": "negative",
+			"👎🏿": "negative",
+			// Negative reactions (cross mark)
+			"❌": "negative",
+			"🚫": "negative",
+			"⛔": "negative",
+			"📍": "negative",
+			"🚷": "negative",
+		};
+
+		const feedbackType = reactionMap[reaction];
+		if (!feedbackType) {
+			console.log(`[nextcloud] Ignoring non-feedback reaction: ${reaction}`);
+			return; // Not a feedback reaction
+		}
+
+		emitFeedback({
+			type: feedbackType,
+			conversationId: `nextcloud:${roomToken}`,
+			messageTs: String(messageId),
+			userId: actorId,
+			source: "reaction",
+			timestamp: Date.now(),
+		});
+
+		console.log(`[nextcloud] Feedback captured: ${feedbackType} from ${actorId} on message ${messageId}`);
+	}
+
+	private async sendProactiveIntroIfFirstRun(): Promise<void> {
+		if (!this.config.sendIntro) return;
+		if (!this.config.ownerUserId) {
+			console.log("[nextcloud] No owner_user_id configured, skipping intro");
+			return;
+		}
+		if (!this.db) return;
+
+		const roomToken = this.config.roomToken;
+
+		try {
+			// Check if intro was already sent
+			const row = this.db
+				.query("SELECT intro_sent_at FROM channel_intros WHERE channel_id = 'nextcloud'")
+				.get() as { intro_sent_at?: string } | undefined;
+
+			if (row?.intro_sent_at) {
+				console.log("[nextcloud] Intro message already sent on previous startup");
+				return;
+			}
+
+			// Send intro message to configured room
+			const introText =
+				"Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.";
+			await this.postToNextcloud(roomToken, introText);
+
+			// Mark as sent
+			this.db.run(
+				"INSERT OR REPLACE INTO channel_intros (channel_id, intro_sent_at, sent_to_chat_id) VALUES (?, datetime('now'), ?)",
+				["nextcloud", roomToken],
+			);
+
+			console.log(`[nextcloud] Sent intro message to room ${roomToken}`);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[nextcloud] Failed to send intro message: ${msg}`);
+			// Don't throw - this is a best-effort welcome message
 		}
 	}
 

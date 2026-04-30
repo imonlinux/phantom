@@ -160,11 +160,16 @@ export const NextcloudChannelConfigSchema = z
 		owner_user_id: z.string().optional(),
 		// Phase 2: Enhanced interactions
 		// Enable progressive "Working on it..." updates during agent processing
-		enable_progressive_updates: z.boolean().default(true),
+		// NOTE: Not supported for Nextcloud due to API limitations (postToNextcloud returns boolean, not message ID)
+		enable_progressive_updates: z.boolean().default(false),
 		// Enable feedback collection via reaction prompts (👍/👎)
 		enable_feedback: z.boolean().default(true),
 		// Throttle progressive updates to avoid rate limits (milliseconds)
+		// NOTE: Not supported for Nextcloud - see enable_progressive_updates above
 		progressive_update_throttle_ms: z.number().int().min(500).max(10000).default(1000),
+			// Phase 6: Proactive intro message
+			// Send welcome message on first startup
+			send_intro: z.boolean().default(false),
 	})
 	.strict();
 

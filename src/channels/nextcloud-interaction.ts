@@ -5,21 +5,31 @@
  * orchestration code from `src/index.ts` (status reactions on the user's
  * message via the Talk Bot reactions API) into an adapter factory.
  *
- * This is a direct lift of the existing logic — no behavior change.
- * Existing Nextcloud tests must continue to pass unchanged after the
- * rewire in `src/index.ts`.
+ * Phase 2: Add progressive updates and feedback mechanism.
  *
- * Note: Nextcloud Talk uses raw Unicode reactions (not Slack-style short
- * names). The NEXTCLOUD_EMOJIS map is owned here now since it's only used
- * by the Nextcloud adapter. ⚠ uses U+26A0 without VS-16 per Fix #8 to
- * avoid validation issues on some Talk deployments.
+ * This adapter provides:
+ * - Status reactions: 👀 queued → 🧠 thinking → 🔧 tool → ✅ done/⚠ error
+ * - Progressive updates: "Working on it..." → tool activity → final response
+ * - Feedback mechanism: "Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)"
+ *
+ * Nextcloud limitations (vs Telegram):
+ * - No inline keyboards → use reaction-based feedback instead
+ * - Message editing available but complex → use new message updates for progress
+ * - No typing indicators → status reactions serve as activity indicator
+ *
+ * Configuration options (from NextcloudChannelConfig):
+ * - enableProgressiveUpdates: Enable progressive "Working on it..." (default: true)
+ * - enableFeedback: Enable feedback collection via reactions (default: true)
+ * - progressiveUpdateThrottleMs: Throttle between updates (default: 1000ms)
  */
 
+import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
 import type { NextcloudChannel } from "./nextcloud.ts";
 import type { InboundMessage } from "./types.ts";
 import { createStatusReactionController, type StatusEmojis, type StatusReactionController } from "./status-reactions.ts";
 
+// Phase 1: Enhanced emoji map for Nextcloud (matches Slack defaults)
 export const NEXTCLOUD_EMOJIS: StatusEmojis = {
 	queued: "👀",
 	thinking: "🧠",
@@ -27,7 +37,7 @@ export const NEXTCLOUD_EMOJIS: StatusEmojis = {
 	coding: "💻",
 	web: "🌐",
 	done: "✅",
-	error: "\u26A0",
+	error: "⚠",
 	stallSoft: "⏳",
 	stallHard: "❗",
 };
@@ -41,6 +51,11 @@ export const NEXTCLOUD_EMOJIS: StatusEmojis = {
  */
 export function createNextcloudInteractionFactory(
 	nextcloudChannel: NextcloudChannel | null,
+	config?: {
+		enableProgressiveUpdates?: boolean;
+		enableFeedback?: boolean;
+		progressiveUpdateThrottleMs?: number;
+	},
 ): ChannelInteractionFactory {
 	return (msg: InboundMessage): ChannelInteractionInstance | null => {
 		if (!nextcloudChannel || msg.channelId !== "nextcloud" || !msg.metadata) return null;
@@ -59,6 +74,7 @@ export function createNextcloudInteractionFactory(
 		const rt = roomToken;
 		const mid = messageId;
 
+		// Phase 1: Status reactions (always enabled)
 		const statusReactions: StatusReactionController = createStatusReactionController({
 			adapter: {
 				addReaction: async (emoji) => {
@@ -76,8 +92,49 @@ export function createNextcloudInteractionFactory(
 		});
 		statusReactions.setQueued();
 
+		// Phase 2: Progressive updates - DISABLED for Nextcloud
+		// Note: Nextcloud's postToNextcloud() returns boolean, not message ID
+		// Without message ID, we can't use the editMessage() API to update progress
+		// Progressive updates would create multiple messages instead of editing one
+		// Therefore, progressive updates are disabled for Nextcloud
+		let progressStream: ProgressStream | undefined;
+		// Explicitly disable even if config enables it
+		if (false && config?.enableProgressiveUpdates !== false) {
+			progressStream = createProgressStream({
+				adapter: {
+					postMessage: async (text) => {
+						await nc.postToNextcloud(rt, text);
+						return "";
+					},
+					updateMessage: async (_msgId, _updatedText) => {
+						// Not implemented - would require message ID tracking
+						console.warn("[nextcloud] Progressive updates not supported - message editing requires message ID");
+					},
+				},
+				onError: (err) => {
+					const errMsg = err instanceof Error ? err.message : String(err);
+					console.warn(`[nextcloud] Progress stream error: ${errMsg}`);
+				},
+				onFinish: async (_msgId, text) => {
+					const enableFeedback = config?.enableFeedback !== false;
+					if (enableFeedback) {
+						const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
+						await nc.postToNextcloud(rt, text + feedbackPrompt);
+					} else {
+						await nc.postToNextcloud(rt, text);
+					}
+				},
+			});
+		}
+
 		return {
 			statusReactions,
+			progressStream,
+
+			async onTurnStart(): Promise<void> {
+				// Phase 2: Start progressive updates
+				await progressStream?.start();
+			},
 
 			onRuntimeEvent(event): void {
 				switch (event.type) {
@@ -86,6 +143,11 @@ export function createNextcloudInteractionFactory(
 						break;
 					case "tool_use":
 						statusReactions.setTool(event.tool);
+						// Phase 2: Add tool activity to progress stream
+						if (progressStream) {
+							const summary = formatToolActivity(event.tool, event.input);
+							progressStream.addToolActivity(event.tool, summary);
+						}
 						break;
 					case "error":
 						statusReactions.setError();
@@ -93,10 +155,27 @@ export function createNextcloudInteractionFactory(
 				}
 			},
 
-			// No deliverResponse override: Nextcloud uses the default router.send
-			// path. The original code explicitly handled the replyToId via the
-			// outbound message's `replyToId` field, which is constructed by the
-			// orchestration based on `msg.metadata.nextcloudMessageId`.
+			async onTurnEnd(): Promise<void> {
+				// Nextcloud doesn't have typing indicators like Telegram
+				// Status reactions serve as the activity indicator
+			},
+
+			async deliverResponse({ text }): Promise<boolean> {
+				// Phase 2: Use progressive updates if enabled
+				if (progressStream) {
+					await progressStream.finish(text);
+					return true;
+				}
+				// Fallback: direct response delivery
+				const enableFeedback = config?.enableFeedback !== false;
+				if (enableFeedback) {
+					const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
+					await nc.postToNextcloud(rt, text + feedbackPrompt);
+				} else {
+					await nc.postToNextcloud(rt, text);
+				}
+				return true;
+			},
 
 			dispose(): void {
 				statusReactions.dispose();

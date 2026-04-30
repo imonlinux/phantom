@@ -90,11 +90,22 @@ Add the Nextcloud channel configuration to your Phantom config:
 **Option A: Using environment variables (`.env`)**
 
 ```bash
+# Required configuration
 NEXTCLOUD_SHARED_SECRET="YOUR_SHARED_SECRET_FROM_STEP_1"
 NEXTCLOUD_ROOM_TOKEN="ROOM_TOKEN_FROM_STEP_2"
 NEXTCLOUD_TALK_SERVER="nextcloud.example.com"
 NEXTCLOUD_BOT_ID="BOT_ID_FROM_STEP_2"
+
+# Optional configuration (with defaults)
+NEXTCLOUD_SESSION_WINDOW_MINUTES="30"
+NEXTCLOUD_OWNER_USER_ID="your_nextcloud_user_id"
+NEXTCLOUD_SEND_INTRO="false"
+NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES="true"
+NEXTCLOUD_ENABLE_FEEDBACK="true"
+NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS="1000"
 ```
+
+**Security Best Practice:** Always use environment variables for sensitive values like `NEXTCLOUD_SHARED_SECRET`. Never hardcode secrets directly in `config/channels.yaml` as this file may be committed to version control. The `.env` file is already gitignored for your protection.
 
 **Option B: Using `config/channels.yaml`**
 
@@ -102,21 +113,33 @@ NEXTCLOUD_BOT_ID="BOT_ID_FROM_STEP_2"
 channels:
   nextcloud:
     enabled: true
-    shared_secret: "YOUR_SHARED_SECRET_FROM_STEP_1"
-    room_token: "ROOM_TOKEN_FROM_STEP_2"
-    talk_server: "nextcloud.example.com"
-    bot_id: "BOT_ID_FROM_STEP_2"
+    shared_secret: "${NEXTCLOUD_SHARED_SECRET}"
+    room_token: "${NEXTCLOUD_ROOM_TOKEN}"
+    talk_server: "${NEXTCLOUD_TALK_SERVER}"
+    bot_id: "${NEXTCLOUD_BOT_ID}"
     webhook_path: "/nextcloud/webhook"
     port: 3200
+    session_window_minutes: 30
+    owner_user_id: "${NEXTCLOUD_OWNER_USER_ID}"
+    send_intro: "${NEXTCLOUD_SEND_INTRO}"
+    enable_progressive_updates: "${NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES}"
+    enable_feedback: "${NEXTCLOUD_ENABLE_FEEDBACK}"
+    progressive_update_throttle_ms: "${NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS}"
 ```
 
 **Configuration fields:**
-- `shared_secret` - The secret from Step 1
-- `room_token` - Your Talk room token
-- `talk_server` - Nextcloud server hostname (no protocol, no trailing slash)
-- `bot_id` - Bot ID from `talk:bot:list` (optional but recommended)
+- `shared_secret` - The secret from Step 1 (env: `NEXTCLOUD_SHARED_SECRET`)
+- `room_token` - Your Talk room token (env: `NEXTCLOUD_ROOM_TOKEN`)
+- `talk_server` - Nextcloud server hostname (env: `NEXTCLOUD_TALK_SERVER`, no protocol, no trailing slash)
+- `bot_id` - Bot ID from `talk:bot:list` (env: `NEXTCLOUD_BOT_ID`, optional but recommended)
 - `webhook_path` - Webhook endpoint path (default: `/nextcloud/webhook`)
 - `port` - Port for the webhook server (default: `3200`)
+- `session_window_minutes` - Time window for session coalescing (env: `NEXTCLOUD_SESSION_WINDOW_MINUTES`, default: `30`)
+- `owner_user_id` - **NEW**: Only respond to this Nextcloud user ID (env: `NEXTCLOUD_OWNER_USER_ID`, optional)
+- `send_intro` - **NEW**: Send welcome message on first startup (env: `NEXTCLOUD_SEND_INTRO`, default: `false`)
+- `enable_progressive_updates` - **NEW**: Show "Working on it..." updates (env: `NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES`, default: `true`) - **NOT AVAILABLE**: Nextcloud API limitation prevents message editing without message ID tracking
+- `enable_feedback` - **NEW**: Collect feedback via reactions (env: `NEXTCLOUD_ENABLE_FEEDBACK`, default: `true`)
+- `progressive_update_throttle_ms` - **NEW**: Throttle progressive updates (env: `NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS`, default: `1000`) - **NOT AVAILABLE**: See above
 
 ## Step 4: Restart Phantom
 
@@ -148,6 +171,111 @@ bun run src/index.ts
    - Send a long-running query
    - The bot should set a 🧠 (thinking) reaction while processing
    - When complete, it should replace with ✅ (done) or ⚠️ (error)
+
+
+## Features
+
+### Status Reactions
+
+Phantom uses emoji reactions to show activity state while processing messages (matches Slack defaults):
+
+| Emoji | Meaning |
+|-------|---------|
+| 👀 | Queued |
+| 🧠 | Thinking |
+| 🔧 | Running tools (generic) |
+| 💻 | Running tools (coding) |
+| 🌐 | Running tools (web) |
+| ✅ | Done |
+| ⚠️ | Error |
+| ⏳ | Stall warning (soft) |
+| ❗ | Stall error (hard) |
+
+These reactions provide real-time feedback without cluttering the chat with status messages.
+
+### Progressive Updates
+
+**⚠️ Not Available for Nextcloud Talk**
+
+Progressive updates (showing "Working on it..." with real-time tool activity) are not supported for Nextcloud Talk due to API limitations. The Nextcloud Bot API's `postToNextcloud()` method returns a boolean success/failure status rather than the message ID, which prevents us from editing the message later with tool activity updates.
+
+**What works instead:**
+- Status reactions (👀 queued → 🧠 thinking → 🔧 tool → ✅ done) provide real-time feedback
+- Final response is delivered when complete
+- Feedback collection via reactions still works
+
+**Comparison with other channels:**
+- Slack: ✅ Progressive updates supported (message editing available)
+- Telegram: ✅ Progressive updates supported (message editing available)
+- Nextcloud: ❌ Progressive updates not supported (API limitation)
+
+### Feedback Collection
+
+When `enable_feedback: true` (default), Phantom appends "💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)" to responses. Your reactions feed into the evolution engine to improve future responses.
+
+**Reaction meanings:**
+- **Positive reactions** (helpful response):
+  - 👍 (thumbs up, including skin tone variants)
+  - ❤️ (heart, including color variants)
+  - ✅ (check mark variants)
+- **Negative reactions** (not helpful):
+  - 👎 (thumbs down, including skin tone variants)
+  - ❌ (cross mark variants)
+
+This matches Slack's rich feedback reaction system for consistency across channels.
+
+Feedback signals are tracked in the evolution queue and used to refine the agent's configuration over time.
+
+### Owner Access Control
+
+To restrict the bot to only respond to you, set `owner_user_id` in your config:
+
+```yaml
+channels:
+  nextcloud:
+    owner_user_id: "${NEXTCLOUD_OWNER_USER_ID}"
+```
+
+**Finding your user ID:**
+1. Send a message in the Talk room
+2. Check Phantom logs for: `actorId=your_user_id`
+3. Copy that ID into your config
+
+When configured:
+- Owner messages are processed normally
+- Non-owner messages get a one-time rejection in the room
+- Repeat non-owner messages are silently ignored (prevents spam)
+
+**Rejection message:**
+
+```
+Hi! I'm Phantom, a personal AI co-worker. I can only respond to my owner.
+If you need your own, check out github.com/ghostwright/phantom.
+```
+
+### Proactive Intro Message
+
+To send a welcome message when Phantom first connects to the room:
+
+```yaml
+# In .env file:
+NEXTCLOUD_SEND_INTRO="true"
+NEXTCLOUD_OWNER_USER_ID="your_nextcloud_user_id"
+
+# In config/channels.yaml:
+channels:
+  nextcloud:
+    send_intro: "${NEXTCLOUD_SEND_INTRO}"
+    owner_user_id: "${NEXTCLOUD_OWNER_USER_ID}"
+```
+
+The intro is sent once per channel (tracked in database) and says:
+
+```
+Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.
+```
+
+**Note:** The intro requires `owner_user_id` to be set to ensure the welcome message goes to the right place.
 
 ## Troubleshooting
 
@@ -358,6 +486,118 @@ sudo -u www-data php occ talk:bot:uninstall <bot_id>
 ```
 
 Removes a bot. Use with caution - this cannot be undone.
+
+### Bot responding to non-owners
+
+If the bot is responding to people it shouldn't:
+
+1. **Verify owner_user_id is set:**
+   ```bash
+   # Check if environment variable is set
+   grep NEXTCLOUD_OWNER_USER_ID .env
+   # Or verify it's referenced in channels.yaml
+   grep NEXTCLOUD_OWNER_USER_ID config/channels.yaml
+   ```
+
+2. **Find your correct user ID:**
+   - Send a message in the Talk room
+   - Check logs: `docker logs phantom | grep "actorId="`
+   - Use that exact ID in your config
+
+3. **Restart Phantom after changing config:**
+   ```bash
+   docker compose restart phantom
+   ```
+
+### Feedback not being collected
+
+If reactions aren't generating feedback signals:
+
+1. **Check feedback is enabled:**
+   ```bash
+   # Check if environment variable is set
+   grep NEXTCLOUD_ENABLE_FEEDBACK .env
+   # Or verify it's referenced in channels.yaml
+   grep NEXTCLOUD_ENABLE_FEEDBACK config/channels.yaml
+   # Should be: "true" (default)
+   ```
+
+2. **Verify bot has reaction permission:**
+   ```bash
+   sudo -u www-data php occ talk:bot:list
+   # Features should include "reaction"
+   ```
+
+3. **Check logs for feedback capture:**
+   ```bash
+   docker logs phantom | grep "Feedback captured"
+   ```
+
+### Intro message not sending
+
+If the welcome message doesn't appear:
+
+1. **Verify send_intro is enabled:**
+   ```bash
+   # Check if environment variable is set
+   grep NEXTCLOUD_SEND_INTRO .env
+   # Or verify it's referenced in channels.yaml
+   grep NEXTCLOUD_SEND_INTRO config/channels.yaml
+   # Should be: "true" to enable
+   ```
+
+2. **Verify owner_user_id is set:**
+   - Intro requires owner_user_id to know where to send
+
+3. **Check if intro was already sent:**
+   ```bash
+   # From within the container
+   docker exec phantom sqlite3 data/phantom.db "SELECT * FROM channel_intros WHERE channel_id='nextcloud'"
+   ```
+
+4. **Clear intro history to re-send:**
+   ```bash
+   docker exec phantom sqlite3 data/phantom.db "DELETE FROM channel_intros WHERE channel_id='nextcloud'"
+   docker compose restart phantom
+   ```
+
+### Progressive updates not working
+
+**Not Applicable - Feature Not Available**
+
+Progressive updates are not supported for Nextcloud Talk due to API limitations. See the "Progressive Updates" section in Features above for details.
+
+If you see multiple "Working on it..." messages, this indicates progressive updates are incorrectly enabled. To disable:
+
+1. **Set enable_progressive_updates to false:**
+   ```bash
+   # In .env file
+   NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES="false"
+   ```
+
+2. **Restart Phantom:**
+   ```bash
+   docker compose restart phantom
+   ```
+
+3. **Verify behavior:**
+   - You should see status reactions on your message instead
+   - Single response when agent completes
+   - No multiple "Working on it..." messages
+
+### Multiple bots in the same room
+
+If you have multiple bots in the same Talk room:
+
+1. **Each bot must have a unique bot ID configured**
+2. **Each bot must ignore messages from other bots**
+   - The `actorType === "Application"` check handles this
+   - The `botId` self-filter prevents self-replies
+3. **Test bot isolation:**
+   - Send a message directed at one bot
+   - Verify only that bot responds
+   - Other bots should ignore the message
+
 
 ## Additional Resources
 

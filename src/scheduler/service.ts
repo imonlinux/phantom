@@ -2,6 +2,8 @@ import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { SlackChannel } from "../channels/slack.ts";
+import type { NextcloudChannel } from "../channels/nextcloud.ts";
+import type { TelegramChannel } from "../channels/telegram.ts";
 import { validateCreateInput } from "./create-validation.ts";
 import { executeJob } from "./executor.ts";
 import { type SchedulerHealthSummary, computeHealthSummary } from "./health.ts";
@@ -25,14 +27,22 @@ type SchedulerDeps = {
 	db: Database;
 	runtime: AgentRuntime;
 	slackChannel?: SlackChannel;
+	nextcloudChannel?: NextcloudChannel;
+	telegramChannel?: TelegramChannel;
 	ownerUserId?: string | null;
+	nextcloudOwnerUsername?: string | null;
+	telegramOwnerChatId?: string | null;
 };
 
 export class Scheduler {
 	private db: Database;
 	private runtime: AgentRuntime;
 	private slackChannel: SlackChannel | undefined;
+	private nextcloudChannel: NextcloudChannel | undefined;
+	private telegramChannel: TelegramChannel | undefined;
 	private ownerUserId: string | null;
+	private nextcloudOwnerUsername: string | null;
+	private telegramOwnerChatId: string | null;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private running = false;
 	private executing = false;
@@ -42,7 +52,11 @@ export class Scheduler {
 		this.db = deps.db;
 		this.runtime = deps.runtime;
 		this.slackChannel = deps.slackChannel;
+		this.nextcloudChannel = deps.nextcloudChannel;
+		this.telegramChannel = deps.telegramChannel;
 		this.ownerUserId = deps.ownerUserId ?? null;
+		this.nextcloudOwnerUsername = deps.nextcloudOwnerUsername ?? null;
+		this.telegramOwnerChatId = deps.telegramOwnerChatId ?? null;
 	}
 
 	onJobComplete(cb: (jobName: string, status: string) => void): void {
@@ -57,6 +71,22 @@ export class Scheduler {
 	setSlackChannel(channel: SlackChannel, ownerUserId: string | null): void {
 		this.slackChannel = channel;
 		this.ownerUserId = ownerUserId ?? null;
+	}
+
+	/**
+	 * Inject the Nextcloud channel after construction. nextcloudOwnerUsername may be null.
+	 */
+	setNextcloudChannel(channel: NextcloudChannel, ownerUsername: string | null): void {
+		this.nextcloudChannel = channel;
+		this.nextcloudOwnerUsername = ownerUsername ?? null;
+	}
+
+	/**
+	 * Inject the Telegram channel after construction. telegramOwnerChatId may be null.
+	 */
+	setTelegramChannel(channel: TelegramChannel, ownerChatId: string | null): void {
+		this.telegramChannel = channel;
+		this.telegramOwnerChatId = ownerChatId ?? null;
 	}
 
 	async start(): Promise<void> {
@@ -330,7 +360,11 @@ export class Scheduler {
 			db: this.db,
 			runtime: this.runtime,
 			slackChannel: this.slackChannel,
+			nextcloudChannel: this.nextcloudChannel,
+			telegramChannel: this.telegramChannel,
 			ownerUserId: this.ownerUserId,
+			nextcloudOwnerUsername: this.nextcloudOwnerUsername,
+			telegramOwnerChatId: this.telegramOwnerChatId,
 			notifyOwner: (text: string) => this.notifyOwner(text),
 		});
 	}

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { validateSchedule } from "./schedule.ts";
-import { type JobCreateInput, type JobDelivery, isValidSlackTarget } from "./types.ts";
+import { type JobCreateInput, type JobDelivery, isValidSlackTarget, isValidNextcloudTarget, isValidTelegramTarget } from "./types.ts";
 
 export const MAX_JOBS = 1_000;
 export const MAX_TASK_BYTES = 32 * 1024;
@@ -46,10 +46,33 @@ export function validateCreateInput(db: Database, input: JobCreateInput): JobDel
 	// (the runtime fallthrough branch records a dropped outcome if unset).
 	// Single canonical default layer per N9.
 	const delivery = input.delivery ?? { channel: "slack" as const, target: "owner" };
-	if (delivery.channel === "slack" && !isValidSlackTarget(delivery.target)) {
-		throw new Error(
-			`invalid delivery.target '${delivery.target}': must be "owner", a Slack channel id (C...), or a Slack user id (U...)`,
-		);
+
+	// Validate target format based on channel
+	switch (delivery.channel) {
+		case "slack":
+			if (!isValidSlackTarget(delivery.target)) {
+				throw new Error(
+					`invalid delivery.target '${delivery.target}' for Slack: must be "owner", a Slack channel id (C...), or a Slack user id (U...)`,
+				);
+			}
+			break;
+		case "nextcloud":
+			if (!isValidNextcloudTarget(delivery.target)) {
+				throw new Error(
+					`invalid delivery.target '${delivery.target}' for Nextcloud: must be "owner" or a valid username`,
+				);
+			}
+			break;
+		case "telegram":
+			if (!isValidTelegramTarget(delivery.target)) {
+				throw new Error(
+					`invalid delivery.target '${delivery.target}' for Telegram: must be "owner" or a numeric chat_id`,
+				);
+			}
+			break;
+		case "none":
+			// No validation needed for "none" channel
+			break;
 	}
 
 	return delivery;

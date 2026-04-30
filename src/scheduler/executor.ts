@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { SlackChannel } from "../channels/slack.ts";
+import type { NextcloudChannel } from "../channels/nextcloud.ts";
+import type { TelegramChannel } from "../channels/telegram.ts";
 import { type DeliveryOutcome, deliverResult } from "./delivery.ts";
 import { computeBackoffNextRun, computeNextRunAt } from "./schedule.ts";
 import { JOB_STATUS_VALUES, type ScheduledJob } from "./types.ts";
@@ -11,7 +13,11 @@ export type ExecutorContext = {
 	db: Database;
 	runtime: AgentRuntime;
 	slackChannel: SlackChannel | undefined;
+	nextcloudChannel: NextcloudChannel | undefined;
+	telegramChannel: TelegramChannel | undefined;
 	ownerUserId: string | null;
+	nextcloudOwnerUsername: string | null;
+	telegramOwnerChatId: string | null;
 	notifyOwner: (text: string) => void;
 };
 
@@ -96,7 +102,11 @@ export async function executeJob(job: ScheduledJob, ctx: ExecutorContext): Promi
 	if (runStatus === "ok" && responseText) {
 		deliveryStatus = await deliverResult(job, responseText, {
 			slackChannel: ctx.slackChannel,
+			nextcloudChannel: ctx.nextcloudChannel,
+			telegramChannel: ctx.telegramChannel,
 			ownerUserId: ctx.ownerUserId,
+			nextcloudOwnerUsername: ctx.nextcloudOwnerUsername,
+			telegramOwnerChatId: ctx.telegramOwnerChatId,
 		});
 	}
 

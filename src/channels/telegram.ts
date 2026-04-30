@@ -762,6 +762,25 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
+	 * Send a direct message to a user via Telegram.
+	 * Used by the scheduler to deliver job results.
+	 */
+	async sendDirectMessage(chatId: number, text: string): Promise<boolean> {
+		if (!this.bot) throw new Error("Telegram bot not connected");
+
+		try {
+			await this.bot.telegram.sendMessage(chatId, text, {
+				parse_mode: "MarkdownV2",
+			});
+			return true;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[telegram] Failed to send direct message to ${chatId}: ${msg}`);
+			return false;
+		}
+	}
+
+	/**
 	 * Attempt a single bot.launch(). On success, transitions to connected
 	 * and starts the healthcheck. On failure, leaves state as "error" and
 	 * returns false so the caller can decide to retry. Never throws.

@@ -176,6 +176,17 @@ export class NextcloudChannel implements Channel {
 		console.log("[nextcloud] Disconnected");
 	}
 
+	/**
+	 * Send a direct message to a user via Nextcloud Talk.
+	 * Used by the scheduler to deliver job results.
+	 * For Nextcloud, we use the configured room token (single room deployment).
+	 * The username parameter is ignored since Nextcloud Talk doesn't have per-user DMs in the same way.
+	 */
+	async sendDirectMessage(_username: string, text: string): Promise<boolean> {
+		const roomToken = this.config.roomToken;
+		return await this.postToNextcloud(roomToken, text);
+	}
+
 	// Fix #1: Replay attack protection - check if nonce was seen before
 	private isNonceSeen(nonce: string): boolean {
 		const entry = this.nonceCache.get(nonce);

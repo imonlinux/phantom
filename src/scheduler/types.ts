@@ -28,8 +28,8 @@ export type Schedule = z.infer<typeof ScheduleSchema>;
 // service.createJob trusts the parsed shape and does not add a second fallback layer.
 // See N9 in the Phase 2.5 scheduler audit for the rationale.
 export const JobDeliverySchema = z.object({
-	channel: z.enum(["slack", "none"]).default("slack"),
-	target: z.string().default("owner").describe('"owner", a Slack channel id (C...), or a Slack user id (U...)'),
+	channel: z.enum(["slack", "nextcloud", "telegram", "none"]).default("slack"),
+	target: z.string().default("owner").describe('"owner", a channel/user id depending on channel (Slack: C.../U..., Nextcloud: username, Telegram: chat_id)'),
 });
 export type JobDelivery = z.infer<typeof JobDeliverySchema>;
 
@@ -100,7 +100,20 @@ export type JobRow = {
 // Accepted Slack delivery targets. "owner" is a symbolic value that resolves
 // at delivery time to the configured Slack owner user id. Channel ids begin
 // with "C", user ids with "U". Anything else is rejected at creation time.
+// Slack target validation: "owner", channel id (C...), or user id (U...)
 const SLACK_TARGET_RE = /^(?:owner|C[A-Z0-9]+|U[A-Z0-9]+)$/;
 export function isValidSlackTarget(target: string): boolean {
 	return SLACK_TARGET_RE.test(target);
+}
+
+// Nextcloud target validation: "owner" or username
+const NEXTCLOUD_TARGET_RE = /^(?:owner|[a-zA-Z0-9._-]+)$/;
+export function isValidNextcloudTarget(target: string): boolean {
+	return NEXTCLOUD_TARGET_RE.test(target);
+}
+
+// Telegram target validation: "owner" or numeric chat_id
+const TELEGRAM_TARGET_RE = /^(?:owner|-?\d+)$/;
+export function isValidTelegramTarget(target: string): boolean {
+	return TELEGRAM_TARGET_RE.test(target);
 }

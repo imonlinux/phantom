@@ -233,8 +233,15 @@ async function main(): Promise<void> {
 		// Wire dynamic tool management tools into the agent as in-process MCP tools
 		const registry = mcpServer.getDynamicToolRegistry();
 
-		// Wire scheduler into the agent (Slack channel set later after channel init)
-		scheduler = new Scheduler({ db, runtime });
+		// Wire scheduler into the agent (channels set later after channel init)
+		scheduler = new Scheduler({
+			db,
+			runtime,
+			nextcloudChannel: nextcloudChannel ?? undefined,
+			telegramChannel: telegramChannel ?? undefined,
+			nextcloudOwnerUsername: channelsConfig?.nextcloud?.owner_username ?? null,
+			telegramOwnerChatId: channelsConfig?.telegram?.owner_chat_id ?? null,
+		});
 		setSchedulerHealthProvider(() => scheduler?.getHealthSummary() ?? null);
 		setSchedulerInstance(scheduler, runtime);
 
@@ -754,6 +761,12 @@ async function main(): Promise<void> {
 	// in that specific case instead of silently no-oping every job.
 	if (scheduler && slackChannel) {
 		scheduler.setSlackChannel(slackChannel, channelsConfig?.slack?.owner_user_id ?? null);
+	}
+	if (scheduler && nextcloudChannel) {
+		scheduler.setNextcloudChannel(nextcloudChannel, channelsConfig?.nextcloud?.owner_username ?? null);
+	}
+	if (scheduler && telegramChannel) {
+		scheduler.setTelegramChannel(telegramChannel, channelsConfig?.telegram?.owner_chat_id ?? null);
 	}
 	if (scheduler) {
 		if (notificationTriggers) {

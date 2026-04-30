@@ -812,14 +812,18 @@
 			? '<input type="text" class="dash-input" id="scheduler-delivery-target" value="' + esc(d.target || "") + '" placeholder="' + esc(kind === "channel" ? "C04ABC123" : "U04ABC123") + '">'
 			: "";
 		return field("scheduler-delivery-channel", "Channel",
-			'<select class="dash-select" id="scheduler-delivery-channel"><option value="slack"' + (d.channel === "slack" ? " selected" : "") + '>Slack</option><option value="none"' + (d.channel === "none" ? " selected" : "") + '>None (silent)</option></select>') +
+			'<select class="dash-select" id="scheduler-delivery-channel"><option value="slack"' + (d.channel === "slack" ? " selected" : "") + '>Slack</option><option value="nextcloud"' + (d.channel === "nextcloud" ? " selected" : "") + '>Nextcloud Talk</option><option value="telegram"' + (d.channel === "telegram" ? " selected" : "") + '>Telegram</option><option value="none"' + (d.channel === "none" ? " selected" : "") + '>None (silent)</option></select>') +
 			(d.channel === "slack"
 				? '<div class="dash-sched-radio-group" role="radiogroup" aria-label="Target">' +
 					radios.map(function (r) {
 						return '<label class="dash-sched-radio"><input type="radio" name="scheduler-delivery-target-kind" value="' + esc(r.value) + '"' + (kind === r.value ? " checked" : "") + '><span>' + esc(r.label) + '</span></label>';
 					}).join("") + '</div>' +
 					(targetInput ? '<div class="dash-field">' + targetInput + (err ? fieldError(err) : "") + '</div>' : "")
-				: '<p class="dash-field-hint">No Slack message. Useful for quiet maintenance tasks.</p>');
+				: (d.channel === "nextcloud"
+					? '<div class="dash-sched-field-hint">Delivers to configured Nextcloud room. Use "owner" target for your DM.</div>'
+					: (d.channel === "telegram"
+					? '<div class="dash-sched-field-hint">Delivers to Telegram chat. Use "owner" target for your private chat.</div>'
+					: '<p class="dash-field-hint">No message delivery. Useful for quiet maintenance tasks.</p>'));
 	}
 
 	// ---- wiring ----
@@ -1053,11 +1057,21 @@
 			}
 		}
 		if (p.delivery && typeof p.delivery === "object") {
-			f.delivery.channel = p.delivery.channel === "none" ? "none" : "slack";
+			f.delivery.channel = p.delivery.channel === "none" ? "none" : (p.delivery.channel || "slack");
 			var t = String(p.delivery.target || "owner");
 			if (t === "owner") f.delivery.targetKind = "owner";
-			else if (/^C[A-Z0-9]+$/.test(t)) { f.delivery.targetKind = "channel"; f.delivery.target = t; }
-			else if (/^U[A-Z0-9]+$/.test(t)) { f.delivery.targetKind = "user"; f.delivery.target = t; }
+			else if (f.delivery.channel === "slack") {
+				if (/^C[A-Z0-9]+$/.test(t)) { f.delivery.targetKind = "channel"; f.delivery.target = t; }
+				else if (/^U[A-Z0-9]+$/.test(t)) { f.delivery.targetKind = "user"; f.delivery.target = t; }
+			}
+			else if (f.delivery.channel === "nextcloud") {
+				// Nextcloud usernames can be any string
+				f.delivery.targetKind = "user";
+				f.delivery.target = t;
+			}
+			else if (f.delivery.channel === "telegram") {
+				if (/^-?\d+$/.test(t)) { f.delivery.targetKind = "user"; f.delivery.target = t; }
+			}
 		}
 		state.create.form = f;
 		state.create.dirtyByUser = false;
@@ -1090,6 +1104,14 @@
 			if (f.delivery.channel === "slack") {
 				if (f.delivery.targetKind === "channel" && !/^C[A-Z0-9]+$/.test(f.delivery.target)) errors.delivery = "Channel id must start with C and use capital letters and digits.";
 				if (f.delivery.targetKind === "user" && !/^U[A-Z0-9]+$/.test(f.delivery.target)) errors.delivery = "User id must start with U and use capital letters and digits.";
+			}
+			if (f.delivery.channel === "nextcloud") {
+				if (f.delivery.targetKind === "owner" && !f.delivery.target.trim()) errors.delivery = "Owner username is required for Nextcloud delivery.";
+				if (f.delivery.targetKind === "user" && !f.delivery.target.trim()) errors.delivery = "Nextcloud username is required.";
+			}
+			if (f.delivery.channel === "telegram") {
+				if (f.delivery.targetKind === "owner" && !f.delivery.target.trim()) errors.delivery = "Owner chat_id is required for Telegram delivery.";
+				if (f.delivery.targetKind === "user" && !/^-?\d+$/.test(f.delivery.target)) errors.delivery = "Telegram chat_id must be numeric (may include - for groups).";
 			}
 		}
 		updateSaveButton();
@@ -1205,8 +1227,14 @@
 		};
 		if (f.description.trim()) payload.description = f.description.trim();
 		if (f.delivery.channel === "none") payload.delivery = { channel: "none", target: "none" };
-		else if (f.delivery.targetKind === "owner") payload.delivery = { channel: "slack", target: "owner" };
-		else payload.delivery = { channel: "slack", target: f.delivery.target.trim() };
+		else if (f.delivery.targetKind === "owner") {
+			if (f.delivery.channel === "slack") payload.delivery = { channel: "slack", target: "owner" };
+			else if (f.delivery.channel === "nextcloud") payload.delivery = { channel: "nextcloud", target: "owner" };
+			else if (f.delivery.channel === "telegram") payload.delivery = { channel: "telegram", target: "owner" };
+		}
+		else if (f.delivery.channel === "slack") payload.delivery = { channel: "slack", target: f.delivery.target.trim() };
+		else if (f.delivery.channel === "nextcloud") payload.delivery = { channel: "nextcloud", target: f.delivery.target.trim() };
+		else if (f.delivery.channel === "telegram") payload.delivery = { channel: "telegram", target: f.delivery.target.trim() };
 		if (f.schedule.kind === "once") payload.deleteAfterRun = f.deleteAfterRun;
 
 		state.create.submitting = true;

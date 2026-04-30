@@ -936,7 +936,10 @@
 	function wireDeliveryInputs() {
 		bindChange("#scheduler-delivery-channel", function (el) {
 			state.create.form.delivery.channel = el.value;
-			if (el.value === "none") state.create.form.delivery.targetKind = "owner";
+			if (el.value === "none" || el.value === "nextcloud" || el.value === "telegram") {
+				state.create.form.delivery.targetKind = "owner";
+				state.create.form.delivery.target = "";
+			}
 			markDirty();
 			renderCreateDrawer();
 		});
@@ -1106,11 +1109,9 @@
 				if (f.delivery.targetKind === "user" && !/^U[A-Z0-9]+$/.test(f.delivery.target)) errors.delivery = "User id must start with U and use capital letters and digits.";
 			}
 			if (f.delivery.channel === "nextcloud") {
-				if (f.delivery.targetKind === "owner" && !f.delivery.target.trim()) errors.delivery = "Owner username is required for Nextcloud delivery.";
 				if (f.delivery.targetKind === "user" && !f.delivery.target.trim()) errors.delivery = "Nextcloud username is required.";
 			}
 			if (f.delivery.channel === "telegram") {
-				if (f.delivery.targetKind === "owner" && !f.delivery.target.trim()) errors.delivery = "Owner chat_id is required for Telegram delivery.";
 				if (f.delivery.targetKind === "user" && !/^-?\d+$/.test(f.delivery.target)) errors.delivery = "Telegram chat_id must be numeric (may include - for groups).";
 			}
 		}
@@ -1131,6 +1132,8 @@
 		var e = state.create.errors;
 		if (e.name || e.task || e.delivery) return false;
 		if (f.delivery.channel === "slack" && f.delivery.targetKind !== "owner" && !f.delivery.target.trim()) return false;
+		if (f.delivery.channel === "nextcloud" && f.delivery.targetKind === "user" && !f.delivery.target.trim()) return false;
+		if (f.delivery.channel === "telegram" && f.delivery.targetKind === "user" && !f.delivery.target.trim()) return false;
 		if (f.schedule.kind === "cron" && !f.schedule.expr.trim()) return false;
 		if (f.schedule.kind === "once" && !f.schedule.at.trim()) return false;
 		if (f.schedule.kind === "daily" && !(f.schedule.expr || f.schedule.at)) return false;

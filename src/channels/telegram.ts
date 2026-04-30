@@ -769,9 +769,8 @@ export class TelegramChannel implements Channel {
 		if (!this.bot) throw new Error("Telegram bot not connected");
 
 		try {
-			await this.bot.telegram.sendMessage(chatId, text, {
-				parse_mode: "MarkdownV2",
-			});
+			// Send as plain text for scheduler output (no formatting to avoid parsing errors)
+			await this.bot.telegram.sendMessage(chatId, text);
 			return true;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

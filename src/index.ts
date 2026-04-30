@@ -237,8 +237,8 @@ async function main(): Promise<void> {
 		scheduler = new Scheduler({
 			db,
 			runtime,
-			nextcloudChannel: nextcloudChannel ?? undefined,
-			telegramChannel: telegramChannel ?? undefined,
+			nextcloudChannel: undefined,
+			telegramChannel: undefined,
 			nextcloudOwnerUsername: channelsConfig?.nextcloud?.owner_username ?? null,
 			telegramOwnerChatId: channelsConfig?.telegram?.owner_chat_id ?? null,
 		});

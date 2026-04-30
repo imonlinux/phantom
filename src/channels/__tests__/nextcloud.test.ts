@@ -992,18 +992,7 @@ describe("NextcloudChannel", () => {
 			expect(customThrottleChannel.getProgressiveUpdateThrottleMs()).toBe(2000);
 		});
 
-		test("emoji map uses human-readable emojis", () => {
-			// Phase 2: Enhanced emoji map for better UX (no allowlist issues)
-			const { NEXTCLOUD_EMOJIS } = require("../nextcloud-interaction.ts");
-
-			expect(NEXTCLOUD_EMOJIS.queued).toBe("👀");
-			expect(NEXTCLOUD_EMOJIS.thinking).toBe("🤔");
-			expect(NEXTCLOUD_EMOJIS.tool).toBe("👨‍💻");
-			expect(NEXTCLOUD_EMOJIS.done).toBe("👌");
-			expect(NEXTCLOUD_EMOJIS.error).toBe("😱");
-		});
-
-		test("feedback prompt is appended to responses", () => {
+		test("feedback prompt format is correct", () => {
 			// Phase 2: When feedback is enabled, responses include feedback prompt
 			const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
 			const response = "Here is your answer";

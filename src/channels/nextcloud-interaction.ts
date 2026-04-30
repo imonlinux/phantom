@@ -189,7 +189,5 @@ export function createNextcloudInteractionFactory(
 				statusReactions.dispose();
 			},
 		};
+	};
 }
-
-// Phase 2: Export constants and types for external use
-export { NEXTCLOUD_EMOJIS, NEXTCLOUD_TIMING };

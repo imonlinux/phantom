@@ -819,11 +819,11 @@
 						return '<label class="dash-sched-radio"><input type="radio" name="scheduler-delivery-target-kind" value="' + esc(r.value) + '"' + (kind === r.value ? " checked" : "") + '><span>' + esc(r.label) + '</span></label>';
 					}).join("") + '</div>' +
 					(targetInput ? '<div class="dash-field">' + targetInput + (err ? fieldError(err) : "") + '</div>' : "")
-				: (d.channel === "nextcloud"
-					? '<div class="dash-sched-field-hint">Delivers to configured Nextcloud room. Use "owner" target for your DM.</div>'
-					: (d.channel === "telegram"
-					? '<div class="dash-sched-field-hint">Delivers to Telegram chat. Use "owner" target for your private chat.</div>'
-					: '<p class="dash-field-hint">No message delivery. Useful for quiet maintenance tasks.</p>'));
+			: d.channel === "nextcloud"
+				? '<div class="dash-sched-field-hint">Delivers to configured Nextcloud room. Use "owner" target for your DM.</div>'
+			: d.channel === "telegram"
+				? '<div class="dash-sched-field-hint">Delivers to Telegram chat. Use "owner" target for your private chat.</div>'
+			: '<p class="dash-field-hint">No message delivery. Useful for quiet maintenance tasks.</p>');
 	}
 
 	// ---- wiring ----

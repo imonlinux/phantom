@@ -83,6 +83,9 @@ async function main(): Promise<void> {
 	const config = loadConfig();
 	console.log(`[phantom] Config loaded: ${config.name} (${config.model}, effort: ${config.effort})`);
 
+	// Load channels config early for scheduler initialization
+	const channelsConfig = loadChannelsConfig();
+
 	// Set web UI public directory
 	setPublicDir(resolve(process.cwd(), "public"));
 	setLoginPageAgentName(config.name);
@@ -309,7 +312,6 @@ async function main(): Promise<void> {
 
 	// Register Slack channel
 	let slackChannel: SlackChannel | null = null;
-	const channelsConfig = loadChannelsConfig();
 	if (channelsConfig?.slack?.enabled && channelsConfig.slack.bot_token && channelsConfig.slack.app_token) {
 		slackChannel = new SlackChannel({
 			botToken: channelsConfig.slack.bot_token,

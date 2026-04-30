@@ -202,8 +202,8 @@ export class NextcloudChannel implements Channel {
 			throw new Error(`Invalid conversation ID (no room token): ${conversationId}`);
 		}
 
-		const result = await this.postToNextcloud(roomToken, message.text, message.replyToId);
-		if (!result.success) {
+		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId);
+		if (!success) {
 			throw new Error("Failed to post message to Nextcloud");
 		}
 
@@ -597,7 +597,7 @@ export class NextcloudChannel implements Channel {
 		return hmac.digest("hex");
 	}
 
-	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<{ success: boolean; messageId?: string }> {
+	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<boolean> {
 		// Fix #17: Validate and sanitize talkServer config
 		let talkServer = this.config.talkServer.trim();
 		// Remove scheme if present
@@ -637,7 +637,6 @@ export class NextcloudChannel implements Channel {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
-						"Accept": "application/json",  // Request JSON response, not XML
 						"OCS-APIRequest": "true",
 						"X-Nextcloud-Talk-Bot-Random": random,
 						"X-Nextcloud-Talk-Bot-Signature": sig,
@@ -646,29 +645,7 @@ export class NextcloudChannel implements Channel {
 				});
 
 				if (res.ok) {
-					// Parse response to extract message ID for progressive updates
-					try {
-						// First, get raw text to see what we received
-						const rawText = await res.text();
-						console.log("[nextcloud] Raw response (200 chars):", rawText.slice(0, 200));
-
-						const responseData = JSON.parse(rawText);
-						console.log("[nextcloud] Parsed JSON response:", JSON.stringify(responseData).slice(0, 200));
-						// OCS API format: { ocs: { meta: {...}, data: {...} } }
-						// The message ID should be in ocs.data.id
-						const messageId = responseData?.ocs?.data?.id;
-						if (typeof messageId === "number" || typeof messageId === "string") {
-							console.log("[nextcloud] Extracted message ID:", messageId);
-							return { success: true, messageId: String(messageId) };
-						}
-						// Fallback: return success without message ID
-						console.log("[nextcloud] No message ID found in response");
-						return { success: true, messageId: undefined };
-					} catch (parseError) {
-						// JSON parse failed, return success without message ID
-						console.log("[nextcloud] JSON parse error:", parseError);
-						return { success: true, messageId: undefined };
-					}
+					return true;
 				}
 
 				// Handle specific error codes
@@ -683,7 +660,7 @@ export class NextcloudChannel implements Channel {
 					} else {
 						// Final attempt - all retries exhausted
 						console.error(`[nextcloud] Rate limited, all ${maxRetries} retries exhausted`);
-						return { success: false, messageId: undefined };
+						return false;
 					}
 				}
 
@@ -699,7 +676,7 @@ export class NextcloudChannel implements Channel {
 				// Non-retryable error
 				const text = await res.text();
 				console.error(`[nextcloud] Bot API error: ${res.status} – ${text.slice(0, 200)}`);
-				return { success: false, messageId: undefined };
+				return false;
 			} catch (err) {
 				lastError = err instanceof Error ? err : new Error(String(err));
 				if (attempt < maxRetries - 1) {
@@ -713,7 +690,7 @@ export class NextcloudChannel implements Channel {
 
 		// All retries exhausted
 		console.error("[nextcloud] All retries exhausted for postToNextcloud:", lastError?.message);
-		return { success: false, messageId: undefined };
+		return false;
 	}
 
 	// Helper method for retry delays

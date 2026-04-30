@@ -103,21 +103,17 @@ export function createNextcloudInteractionFactory(
 			progressStream = createProgressStream({
 				adapter: {
 					postMessage: async (text) => {
-						// Post initial "Working on it..." message and return real message ID
-						console.log("[nextcloud] postMessage called with:", text);
-						const result = await nc.postToNextcloud(rt, text);
-						console.log("[nextcloud] postMessage result:", result);
-						// Return the real Nextcloud message ID for editing
-						return result.messageId || "";
+						// Post initial "Working on it..." message
+						const success = await nc.postToNextcloud(rt, text);
+						// Return a tracking ID for the progress message
+						return success ? `progress_${mid}_${Date.now()}` : "";
 					},
 					updateMessage: async (msgId, updatedText) => {
-						// Update the progress message using the editMessage API
-						console.log("[nextcloud] updateMessage called with msgId:", msgId, "text:", updatedText.slice(0, 50));
-						// Only attempt update if we have a valid message ID
-						if (msgId) {
-							await nc.editMessage(rt, msgId, updatedText);
-						} else {
-							console.log("[nextcloud] updateMessage skipped - no message ID");
+						// Update the progress message with new content
+						// For Nextcloud, we post new messages since editing is complex
+						// This can be improved later to use the editMessage API
+						if (msgId.startsWith("progress_")) {
+							await nc.postToNextcloud(rt, updatedText);
 						}
 					},
 				},
@@ -131,11 +127,9 @@ export function createNextcloudInteractionFactory(
 					const enableFeedback = config?.enableFeedback !== false;
 					if (enableFeedback) {
 						const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
-						const { success } = await nc.postToNextcloud(rt, text + feedbackPrompt);
-						if (!success) console.warn("[nextcloud] Failed to post feedback prompt");
+						await nc.postToNextcloud(rt, text + feedbackPrompt);
 					} else {
-						const { success } = await nc.postToNextcloud(rt, text);
-						if (!success) console.warn("[nextcloud] Failed to post final response");
+						await nc.postToNextcloud(rt, text);
 					}
 				},
 			});
@@ -184,12 +178,11 @@ export function createNextcloudInteractionFactory(
 				const enableFeedback = config?.enableFeedback !== false;
 				if (enableFeedback) {
 					const feedbackPrompt = "\n\nWas this helpful? React with 👍 or 👎";
-					const { success } = await nc.postToNextcloud(rt, text + feedbackPrompt);
-					return success;
+					await nc.postToNextcloud(rt, text + feedbackPrompt);
 				} else {
-					const { success } = await nc.postToNextcloud(rt, text);
-					return success;
+					await nc.postToNextcloud(rt, text);
 				}
+				return true;
 			},
 
 			dispose(): void {

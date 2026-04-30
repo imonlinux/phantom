@@ -237,13 +237,14 @@ async function main(): Promise<void> {
 		const registry = mcpServer.getDynamicToolRegistry();
 
 		// Wire scheduler into the agent (channels set later after channel init)
+		const telegramOwnerUserIds = channelsConfig?.telegram?.owner_user_ids;
 		scheduler = new Scheduler({
 			db,
 			runtime,
 			nextcloudChannel: undefined,
 			telegramChannel: undefined,
 			nextcloudOwnerUsername: channelsConfig?.nextcloud?.owner_username ?? null,
-			telegramOwnerChatId: channelsConfig?.telegram?.owner_chat_id ?? null,
+			telegramOwnerChatId: (Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null),
 		});
 		setSchedulerHealthProvider(() => scheduler?.getHealthSummary() ?? null);
 		setSchedulerInstance(scheduler, runtime);
@@ -768,7 +769,9 @@ async function main(): Promise<void> {
 		scheduler.setNextcloudChannel(nextcloudChannel, channelsConfig?.nextcloud?.owner_username ?? null);
 	}
 	if (scheduler && telegramChannel) {
-		scheduler.setTelegramChannel(telegramChannel, channelsConfig?.telegram?.owner_chat_id ?? null);
+		const telegramOwnerUserIds = channelsConfig?.telegram?.owner_user_ids;
+		const telegramOwnerChatId = (Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null);
+		scheduler.setTelegramChannel(telegramChannel, telegramOwnerChatId);
 	}
 	if (scheduler) {
 		if (notificationTriggers) {

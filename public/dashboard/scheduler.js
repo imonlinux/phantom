@@ -126,7 +126,11 @@
 
 	function deliverySummary(d) {
 		if (!d) return "";
-		return d.channel === "none" ? "silent" : "slack " + (d.target || "owner");
+		if (d.channel === "none") return "silent";
+		if (d.channel === "slack") return "Slack " + (d.target || "owner");
+		if (d.channel === "nextcloud") return "Nextcloud " + (d.target || "owner");
+		if (d.channel === "telegram") return "Telegram " + (d.target || "owner");
+		return d.channel + " " + (d.target || "owner");
 	}
 
 	function cronToHhMm(expr) {

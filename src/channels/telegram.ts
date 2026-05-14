@@ -1458,7 +1458,7 @@ export class TelegramChannel implements Channel {
 				}
 
 				// Download file content
-				const fileUrl = `https://api.telegram.org/file/bot${this.config.token}/${file.file_path}`;
+				const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
 				const response = await fetch(fileUrl);
 				if (!response.ok) {
 					console.error(`[telegram] Failed to download file: ${response.statusText}`);

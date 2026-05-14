@@ -1418,6 +1418,99 @@ export class TelegramChannel implements Channel {
 			}
 		});
 
+		// Handle document/file attachments
+		this.bot.on("document", async (ctx) => {
+			if (!this.messageHandler || !ctx.message?.document) return;
+
+			const document = ctx.message.document;
+			const chatId = ctx.message.chat.id;
+			const chatType = ctx.message.chat.type;
+			const from = ctx.message.from;
+			const senderId = String(from?.id ?? "unknown");
+
+			// P3: access control gate
+			const access = this.resolveAccess(senderId, chatType);
+			if (access === "ignore") return;
+			if (access === "reject_dm") {
+				this.rejectedUsers.add(senderId);
+				try {
+					const reply = this.config.rejectionReply ?? DEFAULT_REJECTION_REPLY;
+					await this.bot?.telegram.sendMessage(chatId, reply);
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.warn(`[telegram] Failed to send rejection reply: ${msg}`);
+				}
+				return;
+			}
+
+			const conversationId = `telegram:${chatId}`;
+			const fileName = document.file_name || `document-${Date.now()}`;
+			const fileId = document.file_id;
+			const fileSize = document.file_size;
+			const mimeType = document.mime_type;
+
+			try {
+				// Get file info from Telegram
+				const file = await this.bot?.telegram.getFile(fileId);
+				if (!file) {
+					console.error(`[telegram] Failed to get file info for ${fileId}`);
+					return;
+				}
+
+				// Download file content
+				const fileUrl = `https://api.telegram.org/file/bot${this.config.token}/${file.file_path}`;
+				const response = await fetch(fileUrl);
+				if (!response.ok) {
+					console.error(`[telegram] Failed to download file: ${response.statusText}`);
+					return;
+				}
+
+				const fileContent = await response.arrayBuffer();
+				const buffer = Buffer.from(fileContent);
+
+				// Save to attachments directory
+				const fs = await import("node:fs");
+				const attachmentsDir = "/app/data/attachments";
+
+				// Ensure directory exists
+				if (!fs.existsSync(attachmentsDir)) {
+					fs.mkdirSync(attachmentsDir, { recursive: true });
+				}
+
+				const filePath = `${attachmentsDir}/${fileName}`;
+				await Bun.write(filePath, buffer);
+
+				console.log(`[telegram] Saved attachment: ${fileName} (${buffer.length} bytes)`);
+
+				// Create inbound message with attachment info
+				const inbound: InboundMessage = {
+					id: String(ctx.message.message_id),
+					channelId: this.id,
+					conversationId,
+					senderId,
+					senderName: from?.first_name ?? from?.username,
+					text: `[File attachment: ${fileName}]`,
+					timestamp: new Date(),
+					attachments: [{
+						filename: fileName,
+						path: filePath,
+						size: buffer.length,
+						mimeType: mimeType,
+					}],
+					metadata: {
+						telegramChatId: chatId,
+						telegramMessageId: ctx.message.message_id,
+						telegramFileId: fileId,
+					},
+				};
+
+				await this.messageHandler(inbound);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Error handling document: ${msg}`);
+			}
+		});
+
 		// P2.3: Feedback button clicks are intercepted and routed to
 		// emitFeedback, NOT to the runtime. Other phantom:* callbacks
 		// (action-button hints from P2.5, etc.) continue to route as

@@ -235,7 +235,12 @@ export class AgentRuntime {
 				},
 			});
 
+			let sdkMessageCount = 0;
+			console.log(`[runtime-debug] SDK iterator opened (sessionKey=${sessionKey}, useResume=${useResume})`);
 			for await (const message of queryStream) {
+				sdkMessageCount++;
+				const msgKind = `${message.type}${"subtype" in message && message.subtype ? `/${message.subtype}` : ""}`;
+				console.log(`[runtime-debug] SDK message #${sdkMessageCount}: ${msgKind}`);
 				switch (message.type) {
 					case "system": {
 						if (message.subtype === "init") {
@@ -274,6 +279,7 @@ export class AgentRuntime {
 					}
 				}
 			}
+			console.log(`[runtime-debug] SDK iterator closed after ${sdkMessageCount} messages`);
 		};
 
 		try {

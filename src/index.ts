@@ -685,6 +685,76 @@ async function main(): Promise<void> {
 			}
 
 			const trackedFiles = runtime.getLastTrackedFiles();
+
+			// Memory consolidation (non-blocking)
+			if (memory.isReady()) {
+				const sessionData: SessionData = {
+					sessionId: response.sessionId,
+					sessionKey: convKey,
+					userId: msg.senderId,
+					userMessages: existing.user,
+					assistantMessages: existing.assistant,
+					toolsUsed: [],
+					filesTracked: trackedFiles,
+					startedAt: sessionStartedAt,
+					endedAt: new Date().toISOString(),
+					costUsd: response.cost.totalUsd,
+					outcome: response.text.startsWith("Error:") ? "failure" : "success",
+				};
+
+				// Phase 3 simplified memory consolidation: the Phase 1+2 LLM judge
+				// path is gone with the rest of the judges directory. Heuristic
+				// extraction ships every session regardless. The reflection
+				// subprocess manages `phantom-config/` memory files on the
+				// cadence, which is the new learning loop; memory/consolidation
+				// here is only the vector-memory episode/fact extractor.
+				consolidateSession(memory, sessionData)
+					.then((result) => {
+						if (result.episodesCreated > 0 || result.factsExtracted > 0) {
+							console.log(
+								`[memory] Consolidated: ${result.episodesCreated} episodes, ` +
+									`${result.factsExtracted} facts (${result.durationMs}ms)`,
+							);
+						}
+					})
+					.catch((err: unknown) => {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						console.warn(`[memory] Consolidation failed: ${errMsg}`);
+					});
+			}
+
+			// Evolution pipeline (non-blocking)
+			if (evolution) {
+				const sessionSummary: SessionSummary = {
+					session_id: response.sessionId,
+					session_key: convKey,
+					user_id: msg.senderId,
+					user_messages: existing.user,
+					assistant_messages: existing.assistant,
+					tools_used: [],
+					files_tracked: trackedFiles,
+					outcome: response.text.startsWith("Error:") ? "failure" : "success",
+					cost_usd: response.cost.totalUsd,
+					started_at: sessionStartedAt,
+					ended_at: new Date().toISOString(),
+				};
+
+				evolution
+					.enqueueIfWorthy(sessionSummary)
+					.then((enqResult) => {
+						const applied = enqResult.inlineResult?.changes_applied.length ?? 0;
+						if (applied > 0) {
+							const updatedConfig = evolution?.getConfig();
+							if (updatedConfig) {
+								runtime.setEvolvedConfig(updatedConfig);
+							}
+						}
+					})
+					.catch((err: unknown) => {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						console.warn(`[evolution] Post-session evolution failed: ${errMsg}`);
+					});
+			}
 		} finally {
 			// Cleanup: Telegram stopTyping (idempotent) and adapter disposal
 			if (isTelegram && telegramChannel && telegramChatId) {
@@ -701,76 +771,6 @@ async function main(): Promise<void> {
 					console.warn(`[orchestration] adapter dispose threw: ${m}`);
 				}
 			}
-		}
-
-		// Memory consolidation (non-blocking)
-		if (memory.isReady()) {
-			const sessionData: SessionData = {
-				sessionId: response.sessionId,
-				sessionKey: convKey,
-				userId: msg.senderId,
-				userMessages: existing.user,
-				assistantMessages: existing.assistant,
-				toolsUsed: [],
-				filesTracked: trackedFiles,
-				startedAt: sessionStartedAt,
-				endedAt: new Date().toISOString(),
-				costUsd: response.cost.totalUsd,
-				outcome: response.text.startsWith("Error:") ? "failure" : "success",
-			};
-
-			// Phase 3 simplified memory consolidation: the Phase 1+2 LLM judge
-			// path is gone with the rest of the judges directory. Heuristic
-			// extraction ships every session regardless. The reflection
-			// subprocess manages `phantom-config/` memory files on the
-			// cadence, which is the new learning loop; memory/consolidation
-			// here is only the vector-memory episode/fact extractor.
-			consolidateSession(memory, sessionData)
-				.then((result) => {
-					if (result.episodesCreated > 0 || result.factsExtracted > 0) {
-						console.log(
-							`[memory] Consolidated: ${result.episodesCreated} episodes, ` +
-								`${result.factsExtracted} facts (${result.durationMs}ms)`,
-						);
-					}
-				})
-				.catch((err: unknown) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[memory] Consolidation failed: ${errMsg}`);
-				});
-		}
-
-		// Evolution pipeline (non-blocking)
-		if (evolution) {
-			const sessionSummary: SessionSummary = {
-				session_id: response.sessionId,
-				session_key: convKey,
-				user_id: msg.senderId,
-				user_messages: existing.user,
-				assistant_messages: existing.assistant,
-				tools_used: [],
-				files_tracked: trackedFiles,
-				outcome: response.text.startsWith("Error:") ? "failure" : "success",
-				cost_usd: response.cost.totalUsd,
-				started_at: sessionStartedAt,
-				ended_at: new Date().toISOString(),
-			};
-
-			evolution
-				.enqueueIfWorthy(sessionSummary)
-				.then((enqResult) => {
-					const applied = enqResult.inlineResult?.changes_applied.length ?? 0;
-					if (applied > 0) {
-						const updatedConfig = evolution?.getConfig();
-						if (updatedConfig) {
-							runtime.setEvolvedConfig(updatedConfig);
-						}
-					}
-				})
-				.catch((err: unknown) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[evolution] Post-session evolution failed: ${errMsg}`);
-				});
 		}
 	});
 

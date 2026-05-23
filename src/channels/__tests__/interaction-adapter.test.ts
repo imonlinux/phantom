@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
-	ChannelInteractionRegistry,
 	type ChannelInteractionFactory,
 	type ChannelInteractionInstance,
+	ChannelInteractionRegistry,
 } from "../interaction-adapter.ts";
 import type { InboundMessage } from "../types.ts";
 
@@ -69,8 +69,7 @@ describe("ChannelInteractionRegistry", () => {
 		const registry = new ChannelInteractionRegistry();
 		const slackInstance: ChannelInteractionInstance = { dispose: () => {} };
 
-		const slackFactory: ChannelInteractionFactory = (msg) =>
-			msg.channelId === "slack" ? slackInstance : null;
+		const slackFactory: ChannelInteractionFactory = (msg) => (msg.channelId === "slack" ? slackInstance : null);
 		registry.register(slackFactory);
 
 		const slackMsg = makeMessage({ channelId: "slack" });

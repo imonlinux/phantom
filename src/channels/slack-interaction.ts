@@ -12,10 +12,10 @@
  */
 
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
+import { type ProgressStream, createProgressStream, formatToolActivity } from "./progress-stream.ts";
 import type { SlackChannel } from "./slack.ts";
+import { type StatusReactionController, createStatusReactionController } from "./status-reactions.ts";
 import type { InboundMessage } from "./types.ts";
-import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
-import { createStatusReactionController, type StatusReactionController } from "./status-reactions.ts";
 
 /**
  * Build a factory that produces Slack interaction adapters when the

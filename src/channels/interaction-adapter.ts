@@ -18,10 +18,10 @@
  * must never throw into the orchestration loop.
  */
 
-import type { InboundMessage } from "./types.ts";
-import type { StatusReactionController } from "./status-reactions.ts";
-import type { ProgressStream } from "./progress-stream.ts";
 import type { RuntimeEvent } from "../agent/runtime.ts";
+import type { ProgressStream } from "./progress-stream.ts";
+import type { StatusReactionController } from "./status-reactions.ts";
+import type { InboundMessage } from "./types.ts";
 
 /**
  * Per-message adapter instance. Created once per inbound message by the

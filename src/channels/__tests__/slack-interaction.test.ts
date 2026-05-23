@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createSlackInteractionFactory } from "../slack-interaction.ts";
 import type { InboundMessage } from "../types.ts";
 
@@ -132,7 +132,7 @@ describe("createSlackInteractionFactory", () => {
 		const factory = createSlackInteractionFactory(channel);
 
 		const instance = factory(makeSlackMessage());
-		instance?.onRuntimeEvent?.({ type: "thinking", sessionId: "s1" });
+		instance?.onRuntimeEvent?.({ type: "thinking" });
 		await new Promise((r) => setTimeout(r, 600)); // debounce is 500ms
 		expect(calls.addReaction.some((c) => c.emoji === "brain")).toBe(true);
 	});
@@ -147,7 +147,6 @@ describe("createSlackInteractionFactory", () => {
 			type: "tool_use",
 			tool: "Read",
 			input: { file_path: "/x.ts" },
-			sessionId: "s1",
 		});
 		await new Promise((r) => setTimeout(r, 1200)); // progress throttle is 1000ms
 		expect(calls.updateMessage.length).toBeGreaterThanOrEqual(1);

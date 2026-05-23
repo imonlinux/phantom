@@ -9,8 +9,6 @@ import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
 import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
 import { ChannelInteractionRegistry } from "./channels/interaction-adapter.ts";
-import { formatToolActivity } from "./channels/progress-stream.ts";
-import { createProgressStream } from "./channels/progress-stream.ts";
 import { ChannelRouter } from "./channels/router.ts";
 import { setActionFollowUpHandler } from "./channels/slack-actions.ts";
 import { createSlackChannel, readSlackTransportFromEnv } from "./channels/slack-channel-factory.ts";
@@ -19,7 +17,6 @@ import { setSlackHttpChannelProvider } from "./channels/slack-http-routes.ts";
 import { createSlackInteractionFactory } from "./channels/slack-interaction.ts";
 import { SlackMetrics } from "./channels/slack-metrics.ts";
 import type { SlackTransport } from "./channels/slack-transport.ts";
-import { createStatusReactionController } from "./channels/status-reactions.ts";
 import { TelegramChannel } from "./channels/telegram.ts";
 import { WebhookChannel } from "./channels/webhook.ts";
 import { DEFAULT_METADATA_BASE_URL } from "./config/identity-fetcher.ts";
@@ -388,6 +385,10 @@ async function main(): Promise<void> {
 		},
 	});
 
+	// Phase 1: Register interaction adapters for channel-specific features
+	// Declared here so router.onMessage can access it outside the slackChannel block
+	const interactionRegistry = new ChannelInteractionRegistry();
+
 	if (slackChannel) {
 		slackChannel.setPhantomName(config.name);
 
@@ -415,14 +416,11 @@ async function main(): Promise<void> {
 			});
 		});
 
+		// Phase 1: Register Slack interaction adapter
+		interactionRegistry.register(createSlackInteractionFactory(slackChannel));
+
 		router.register(slackChannel);
 		console.log(`[phantom] Slack channel registered (transport=${slackTransport})`);
-
-		// Phase 1: Register interaction adapters for channel-specific features
-		const interactionRegistry = new ChannelInteractionRegistry();
-		if (slackChannel) {
-			interactionRegistry.register(createSlackInteractionFactory(slackChannel));
-		}
 
 		// In an operator-managed deployment the agent posts a best-effort
 		// "ready" signal to the host metadata gateway so the operator's
@@ -622,7 +620,7 @@ async function main(): Promise<void> {
 
 		// Invoke adapter lifecycle hooks
 		for (const interaction of interactions) {
-			await interaction.onTurnStart();
+			await interaction.onTurnStart?.();
 		}
 
 		const response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
@@ -635,7 +633,7 @@ async function main(): Promise<void> {
 				case "error":
 					// Fan out runtime events to all adapters
 					for (const interaction of interactions) {
-						interaction.onRuntimeEvent(event);
+						interaction.onRuntimeEvent?.(event);
 					}
 					break;
 			}
@@ -649,7 +647,7 @@ async function main(): Promise<void> {
 		// Invoke adapter turn-end hooks
 		const isError = response.text.startsWith("Error:");
 		for (const interaction of interactions) {
-			await interaction.onTurnEnd({ text: response.text, isError });
+			await interaction.onTurnEnd?.({ text: response.text, isError });
 		}
 
 		// Telegram: stop typing indicator (not yet adapted)
@@ -660,7 +658,7 @@ async function main(): Promise<void> {
 		// Deliver response: first adapter claiming delivery wins, otherwise router.send fallback
 		let delivered = false;
 		for (const interaction of interactions) {
-			const claimed = await interaction.deliverResponse({ text: response.text, isError });
+			const claimed = await interaction.deliverResponse?.({ text: response.text, isError });
 			if (claimed) {
 				delivered = true;
 				break;
@@ -676,7 +674,7 @@ async function main(): Promise<void> {
 
 		// Cleanup: dispose all adapters
 		for (const interaction of interactions) {
-			interaction.dispose();
+			interaction.dispose?.();
 		}
 
 		if (response.cost.totalUsd > 0) {
@@ -758,9 +756,6 @@ async function main(): Promise<void> {
 					console.warn(`[evolution] Post-session evolution failed: ${errMsg}`);
 				});
 		}
-
-		// Clean up
-		statusReactions?.dispose();
 	});
 
 	const server = startServer(config, startedAt);

@@ -26,6 +26,15 @@ export type EmailChannelConfig = {
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+// Re-issue IDLE well under the typical 30-minute server-side idle timeout
+// (RFC 2177 §3 recommends clients refresh before 29 minutes). 20 minutes
+// gives margin for slow networks and providers that enforce tighter limits.
+const IDLE_REFRESH_MS = 20 * 60 * 1000;
+
+// Backoff for reconnect attempts after an IDLE session ends in error.
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 60_000;
+
 // Track threads for In-Reply-To/References headers
 type EmailThread = {
 	messageId: string;
@@ -52,6 +61,13 @@ export class EmailChannel implements Channel {
 	private threads = new Map<string, EmailThread>();
 	private idleAbort: AbortController | null = null;
 	private idleLoopPromise: Promise<void> | null = null;
+	// Refresh timer that aborts the current IDLE call every IDLE_REFRESH_MS
+	// so the server never sees the socket as stale and drops it.
+	private idleRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+	// Set by the ImapFlow 'error' listener when the underlying socket dies.
+	// Distinguishes a refresh-abort (still healthy) from an error-abort
+	// (must reconnect before re-issuing IDLE).
+	private idleBroken = false;
 
 	constructor(config: EmailChannelConfig) {
 		this.config = config;
@@ -62,18 +78,7 @@ export class EmailChannel implements Channel {
 		this.connectionState = "connecting";
 
 		try {
-			// Initialize IMAP
-			const { ImapFlow } = await import("imapflow");
-			this.imapClient = new ImapFlow({
-				host: this.config.imap.host,
-				port: this.config.imap.port,
-				auth: this.config.imap.auth,
-				secure: this.config.imap.tls ?? true,
-				logger: false,
-			}) as unknown as ImapFlowClient;
-
-			await this.imapClient.connect();
-			console.log("[email] IMAP connected");
+			await this.initImapClient();
 
 			// Initialize SMTP
 			const nodemailer = await import("nodemailer");
@@ -87,7 +92,8 @@ export class EmailChannel implements Channel {
 			this.connectionState = "connected";
 			console.log("[email] SMTP configured");
 
-			// Start IDLE listening (tracked so disconnect can await it)
+			// Start IDLE listening (tracked so disconnect can await it).
+			// The loop self-heals on socket errors via reconnectImapClient.
 			this.idleLoopPromise = this.startIdleLoop();
 		} catch (err: unknown) {
 			this.connectionState = "error";
@@ -97,10 +103,53 @@ export class EmailChannel implements Channel {
 		}
 	}
 
+	/**
+	 * Build a fresh ImapFlow client, attach the error listener that
+	 * prevents socket-timeout crashes, and connect. Reused by both
+	 * connect() and the reconnect path inside startIdleLoop.
+	 */
+	private async initImapClient(): Promise<void> {
+		const { ImapFlow } = await import("imapflow");
+		const client = new ImapFlow({
+			host: this.config.imap.host,
+			port: this.config.imap.port,
+			auth: this.config.imap.auth,
+			secure: this.config.imap.tls ?? true,
+			logger: false,
+		}) as unknown as ImapFlowClient;
+
+		this.attachImapErrorHandler(client);
+		this.imapClient = client;
+		await client.connect();
+		console.log("[email] IMAP connected");
+	}
+
+	/**
+	 * ImapFlow emits 'error' on the client EventEmitter for async socket
+	 * failures (timeouts, TLS drops, server-initiated disconnects). The
+	 * IDLE loop's try/catch only sees promise rejections from idle(),
+	 * which does NOT cover this emission path. Without a listener Node/Bun
+	 * treat the emitted 'error' as fatal and the whole Phantom process
+	 * dies, taking every in-flight agent session with it.
+	 *
+	 * The handler marks the connection broken and aborts any in-flight
+	 * IDLE so the loop notices, returns false from its session, and the
+	 * outer loop in startIdleLoop triggers a reconnect.
+	 */
+	private attachImapErrorHandler(client: ImapFlowClient): void {
+		client.on("error", (err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[email] IMAP socket error: ${msg}`);
+			this.idleBroken = true;
+			this.idleAbort?.abort();
+		});
+	}
+
 	async disconnect(): Promise<void> {
 		if (this.connectionState === "disconnected") return;
 
 		this.connectionState = "disconnected";
+		this.cancelIdleRefresh();
 		this.idleAbort?.abort();
 
 		// Wait for the IDLE loop to finish and release the mailbox lock
@@ -166,37 +215,121 @@ export class EmailChannel implements Channel {
 		return this.connectionState;
 	}
 
+	/**
+	 * Outer IDLE supervisor. Runs one IDLE session; if the session ends
+	 * because the socket died (idleBroken or non-abort error), rebuilds
+	 * the ImapFlow client with exponential backoff and tries again.
+	 * Exits cleanly when disconnect() flips connectionState.
+	 */
 	private async startIdleLoop(): Promise<void> {
-		if (!this.imapClient) return;
+		let reconnectAttempts = 0;
+
+		while (this.connectionState === "connected") {
+			this.idleBroken = false;
+			const healthy = await this.runIdleSession();
+
+			if (this.connectionState !== "connected") return;
+			if (healthy) return;
+
+			// Session ended badly: back off and rebuild the client.
+			const delayMs = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts, RECONNECT_MAX_DELAY_MS);
+			reconnectAttempts++;
+			console.warn(`[email] IMAP reconnecting in ${delayMs}ms (attempt ${reconnectAttempts})`);
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+			if (this.connectionState !== "connected") return;
+
+			try {
+				await this.reconnectImapClient();
+				reconnectAttempts = 0;
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[email] IMAP reconnect failed: ${msg}; will retry`);
+				// Loop continues; backoff keeps growing up to the cap.
+			}
+		}
+	}
+
+	/**
+	 * One IDLE session: acquire INBOX lock, drain unread, then loop on
+	 * idle() until disconnect, an error, or a refresh-abort.
+	 *
+	 * Returns true on clean exit (disconnect), false when the session
+	 * ended badly and the caller should reconnect.
+	 */
+	private async runIdleSession(): Promise<boolean> {
+		if (!this.imapClient) return false;
 
 		try {
 			const lock = await this.imapClient.getMailboxLock("INBOX");
 
 			try {
-				// Process any unread messages first
 				await this.processUnread();
 
-				// Start IDLE loop
-				while (this.connectionState === "connected") {
+				while (this.connectionState === "connected" && !this.idleBroken) {
 					this.idleAbort = new AbortController();
+					this.scheduleIdleRefresh();
+
 					try {
 						await this.imapClient.idle({ abort: this.idleAbort.signal });
 					} catch (err: unknown) {
 						const msg = err instanceof Error ? err.message : String(err);
-						if (msg.includes("abort")) break;
+						if (msg.includes("abort")) {
+							// Disconnect-abort or refresh-abort. Error handler
+							// sets idleBroken for the socket-death case.
+							if (this.idleBroken) return false;
+							if (this.connectionState !== "connected") return true;
+							continue; // refresh: re-issue IDLE
+						}
 						console.warn(`[email] IDLE error: ${msg}`);
-						break;
+						return false;
+					} finally {
+						this.cancelIdleRefresh();
 					}
 
-					// IDLE was interrupted by new mail
+					// IDLE was interrupted by new mail.
 					await this.processUnread();
 				}
+
+				return !this.idleBroken;
 			} finally {
 				lock.release();
 			}
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
-			console.error(`[email] IDLE loop error: ${msg}`);
+			console.error(`[email] IDLE session error: ${msg}`);
+			return false;
+		}
+	}
+
+	/**
+	 * Tear down the old (likely broken) ImapFlow client and build a fresh
+	 * one. Errors from the old logout are expected and ignored.
+	 */
+	private async reconnectImapClient(): Promise<void> {
+		try {
+			await this.imapClient?.logout();
+		} catch {
+			// Socket is already dead; nothing to cleanly close.
+		}
+		await this.initImapClient();
+	}
+
+	/**
+	 * Schedule an abort of the current IDLE call before the server's
+	 * idle timeout drops the socket. The IDLE loop re-issues immediately.
+	 */
+	private scheduleIdleRefresh(): void {
+		this.cancelIdleRefresh();
+		this.idleRefreshTimer = setTimeout(() => {
+			this.idleAbort?.abort();
+		}, IDLE_REFRESH_MS);
+	}
+
+	private cancelIdleRefresh(): void {
+		if (this.idleRefreshTimer) {
+			clearTimeout(this.idleRefreshTimer);
+			this.idleRefreshTimer = null;
 		}
 	}
 
@@ -332,8 +465,12 @@ function isAutoReply(subject: string, body: string): boolean {
 	return autoReplyIndicators.some((indicator) => combined.includes(indicator));
 }
 
-// Minimal type interfaces for ImapFlow and Nodemailer
+// Minimal type interfaces for ImapFlow and Nodemailer.
+// `on` is included because ImapFlow extends EventEmitter and emits
+// 'error' on socket timeouts; without a listener Node/Bun treat the
+// emitted 'error' as an uncaught exception and crash the process.
 type ImapFlowClient = {
+	on: (event: "error", handler: (err: unknown) => void) => void;
 	connect: () => Promise<void>;
 	logout: () => Promise<void>;
 	getMailboxLock: (mailbox: string) => Promise<{ release: () => void }>;

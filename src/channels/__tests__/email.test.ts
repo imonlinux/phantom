@@ -23,14 +23,27 @@ const mockFetch = mock(function* () {
 const mockMessageFlagsAdd = mock(() => Promise.resolve());
 const mockSendMail = mock(() => Promise.resolve({ messageId: "<test@phantom.local>" }));
 
-const MockImapFlow = mock((_opts: Record<string, unknown>) => ({
-	connect: mockConnect,
-	logout: mockLogout,
-	getMailboxLock: mockGetMailboxLock,
-	idle: mockIdle,
-	fetch: mockFetch,
-	messageFlagsAdd: mockMessageFlagsAdd,
-}));
+// Captured per-instance so tests can simulate a socket-timeout emission.
+interface CapturedClient {
+	errorHandlers: Array<(err: unknown) => void>;
+}
+const capturedClients: CapturedClient[] = [];
+
+const MockImapFlow = mock((_opts: Record<string, unknown>) => {
+	const handlers: CapturedClient = { errorHandlers: [] };
+	capturedClients.push(handlers);
+	return {
+		on: mock((event: string, handler: (err: unknown) => void) => {
+			if (event === "error") handlers.errorHandlers.push(handler);
+		}),
+		connect: mockConnect,
+		logout: mockLogout,
+		getMailboxLock: mockGetMailboxLock,
+		idle: mockIdle,
+		fetch: mockFetch,
+		messageFlagsAdd: mockMessageFlagsAdd,
+	};
+});
 
 const mockCreateTransport = mock((_opts: Record<string, unknown>) => ({
 	sendMail: mockSendMail,
@@ -70,6 +83,7 @@ describe("EmailChannel", () => {
 		mockLogout.mockClear();
 		mockSendMail.mockClear();
 		mockGetMailboxLock.mockClear();
+		capturedClients.length = 0;
 	});
 
 	test("has correct id and capabilities", () => {
@@ -191,5 +205,43 @@ describe("EmailChannel", () => {
 		const id1 = calls[0][0].messageId;
 		const id2 = calls[1][0].messageId;
 		expect(id1).not.toBe(id2);
+	});
+
+	test("attaches an ImapFlow error listener on connect (no crash on socket timeout)", async () => {
+		const channel = new EmailChannel(testConfig);
+		await channel.connect();
+
+		// The first constructed client must have an error handler registered.
+		expect(capturedClients.length).toBeGreaterThan(0);
+		expect(capturedClients[0].errorHandlers.length).toBe(1);
+
+		// Emitting 'error' must not throw and must not reject any promise.
+		// Before the fix this is what crashed the Phantom process.
+		await expect(
+			Promise.resolve(capturedClients[0].errorHandlers[0](new Error("Socket timeout"))),
+		).resolves.toBeUndefined();
+
+		await channel.disconnect();
+	});
+
+	test("error emission triggers a reconnect that builds a fresh client", async () => {
+		const channel = new EmailChannel(testConfig);
+		await channel.connect();
+
+		expect(capturedClients.length).toBe(1);
+		const initialClientCount = capturedClients.length;
+
+		// Simulate the socket-timeout emission from imapflow.
+		capturedClients[0].errorHandlers[0](new Error("Socket timeout"));
+
+		// Allow the reconnect path (with its 1s backoff) to run.
+		await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+		// A second client should have been constructed.
+		expect(capturedClients.length).toBe(initialClientCount + 1);
+		expect(capturedClients[capturedClients.length - 1].errorHandlers.length).toBe(1);
+		expect(mockConnect.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+		await channel.disconnect();
 	});
 });

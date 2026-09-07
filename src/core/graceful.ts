@@ -21,6 +21,22 @@ export function installShutdownHandlers(): void {
 	process.on("SIGTERM", handler);
 }
 
+// Why: Bun terminates the whole process on any unhandled rejection. Aborting
+// an in-flight Agent SDK query legitimately produces rejections inside the
+// SDK's own control-request writes: the child transport dies mid-round-trip
+// and a pending control response write rejects. Those must not take the
+// server down before the interrupted turn can deliver its ack, so rejections
+// are logged loudly and the process keeps running.
+export function installUnhandledRejectionGuard(): void {
+	process.on("unhandledRejection", (reason: unknown) => {
+		const msg = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+		console.error(`[phantom] Unhandled rejection (process kept alive): ${msg}`);
+		if (reason instanceof Error && reason.stack) {
+			console.error(reason.stack);
+		}
+	});
+}
+
 async function runShutdown(): Promise<void> {
 	console.log("\n[phantom] Shutting down...");
 

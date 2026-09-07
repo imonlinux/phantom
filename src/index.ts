@@ -19,7 +19,7 @@ import { TelegramChannel } from "./channels/telegram.ts";
 import { createTelegramInteractionFactory } from "./channels/telegram-interaction.ts";
 import { WebhookChannel } from "./channels/webhook.ts";
 import { loadChannelsConfig, loadConfig } from "./config/loader.ts";
-import { installShutdownHandlers, onShutdown } from "./core/graceful.ts";
+import { installShutdownHandlers, installUnhandledRejectionGuard, onShutdown } from "./core/graceful.ts";
 import {
 	setChannelHealthProvider,
 	setChatHandler,
@@ -731,6 +731,7 @@ async function main(): Promise<void> {
 
 	const server = startServer(config, startedAt);
 
+	installUnhandledRejectionGuard();
 	installShutdownHandlers();
 	onShutdown("HTTP server", async () => {
 		server.stop();

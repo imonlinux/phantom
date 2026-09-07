@@ -502,10 +502,19 @@ export class NextcloudChannel implements Channel {
 
 		const roomName = target?.name ?? "room";
 
-		console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`);
+		// Talk webhook types observed in production: "Create" (new message),
+		// "Like" (reaction added), "Undo" (reaction removed), "Activity"
+		// (system message such as "{actor} deleted a reaction"). Only Create
+		// is logged at info level; the bot receives echoes of its own reaction
+		// lifecycle for every change, and logging those at info turns the log
+		// into reaction spam during busy turns.
+		if (type === "Create") {
+			console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`);
+		}
 
-		// Handle reaction events for feedback
-		if (type === "React") {
+		// Reaction feedback: Talk delivers reaction additions as "Like"
+		// (there is no "React" type; that routing never fired).
+		if (type === "Like") {
 			this.handleReactionFeedback(payload, roomToken);
 			return { status: 200, error: undefined };
 		}
@@ -876,6 +885,15 @@ export class NextcloudChannel implements Channel {
 
 		if (!actorId || !messageId || !reaction) {
 			console.log("[nextcloud] Reaction event missing required fields");
+			return;
+		}
+
+		// Ignore reactions from bot actors. Talk delivers the bot's own
+		// reaction lifecycle back through the webhook (actorId looks like
+		// "bots/bot-<hash>"), and without this filter a bot reaction on a
+		// feedback-mapped emoji would register as user feedback. Bot actors
+		// also have no display name, so Talk renders them as "Deleted user".
+		if (actorId.startsWith("bots/") || actorId.startsWith("bot-")) {
 			return;
 		}
 

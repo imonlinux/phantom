@@ -8,7 +8,10 @@
  * Phase 2: Add progressive updates and feedback mechanism.
  *
  * This adapter provides:
- * - Status reactions: 👀 queued → 🧠 thinking → 🔧 tool → ✅ done/⚠ error
+ * - Status reactions: 👀 queued → 🧠 thinking → 🔧 tool → removed on done / ⚠ error
+ *   (Talk renders every reaction change as a chat system message, so a
+ *   successful turn clears the reaction instead of parking a ✅ on the
+ *   message; see issue #1)
  * - Progressive updates: "Working on it..." → tool activity → final response
  * - Feedback mechanism: "Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)"
  *
@@ -75,7 +78,7 @@ export function createNextcloudInteractionFactory(
 		const mid = messageId;
 
 		// Phase 1: Status reactions (always enabled)
-		const statusReactions: StatusReactionController = createStatusReactionController({
+		const inner = createStatusReactionController({
 			adapter: {
 				addReaction: async (emoji) => {
 					await nc.setReaction(rt, mid, emoji, true);
@@ -90,6 +93,15 @@ export function createNextcloudInteractionFactory(
 				console.warn(`[nextcloud] Reaction error: ${errMsg}`);
 			},
 		});
+		// Talk logs every reaction change as a chat system message, and bot
+		// actors render as "Deleted user" in that log. On success the turn
+		// therefore removes the reaction entirely (the response message is
+		// the done signal) instead of applying a terminal ✅. Errors keep
+		// the ⚠ from setError so failed turns stay identifiable in history.
+		const statusReactions: StatusReactionController = {
+			...inner,
+			setDone: () => inner.clear(),
+		};
 		statusReactions.setQueued();
 
 		// Phase 2: Progressive updates - DISABLED for Nextcloud

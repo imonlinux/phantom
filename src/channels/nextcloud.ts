@@ -339,6 +339,9 @@ export class NextcloudChannel implements Channel {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
+					// OCS endpoints answer XML on a 200 when Accept is absent; the
+					// probe would then fail to parse every valid response
+					"Accept": "application/json",
 					"OCS-APIRequest": "true",
 					"X-Nextcloud-Talk-Bot-Random": random,
 					"X-Nextcloud-Talk-Bot-Signature": sig,

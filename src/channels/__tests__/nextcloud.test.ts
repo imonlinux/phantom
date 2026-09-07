@@ -1258,6 +1258,8 @@ describe("NextcloudChannel", () => {
 			const probe = outboundCalls.find((c) => c.url.endsWith("/bot/ask-features"));
 			expect(probe).toBeDefined();
 			expect(probe?.method).toBe("POST");
+			// Without Accept the OCS endpoint answers XML on a 200 and the parse dies
+			expect(probe?.headers["Accept"]).toBe("application/json");
 			expect(JSON.parse(probe?.body ?? "{}")).toEqual({ token: ROOM_TOKEN });
 			// Signature covers random + room token (Fix #18 asymmetry), not the JSON body
 			const random = probe?.headers["X-Nextcloud-Talk-Bot-Random"] ?? "";

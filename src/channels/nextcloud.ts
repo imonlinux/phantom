@@ -24,12 +24,22 @@ export type NextcloudChannelConfig = {
 	sessionWindowMinutes?: number;
 	botId?: string; // Fix #12: Bot's own ID for self-filtering to prevent bot loops
 	ownerUserId?: string; // Phase 3: Owner access control - only this user can trigger the bot
-	// Phase 2: Enhanced interactions
-	enableProgressiveUpdates?: boolean; // Enable progressive "Working on it..." updates
 	enableFeedback?: boolean; // Enable feedback collection via reactions
-	progressiveUpdateThrottleMs?: number; // Throttle progressive updates (ms)
 	sendIntro?: boolean; // Phase 6: Enable proactive intro message
+	// Talk 24+: post responses into the Talk thread a message belongs to.
+	// The bot only ever joins existing threads via threadId on sendMessage;
+	// it cannot create threads (bot POST responses carry no message ID).
+	enableThreads?: boolean;
 };
+
+// Bot feature bitmask from POST /bot/ask-features (Talk 24+, requires the
+// bot-features-api capability). Values mirror spreed's lib/Model/Bot.php.
+export const NEXTCLOUD_BOT_FEATURES = {
+	WEBHOOK: 1,
+	RESPONSE: 2,
+	EVENT: 4,
+	REACTION: 8,
+} as const;
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -49,11 +59,13 @@ interface NextcloudWebhookPayload {
 		name: string;
 	};
 	object?: {
+		type?: string; // "Note" for chat messages, "react" for reaction events
 		id?: number | string;
 		content?: string;
 		name?: string;
 		parentMessageId?: number | string;
-		reaction?: string; // Phase 2: For reaction events
+		threadId?: number | string; // Talk 24+: present when the message lives inside a thread
+		reaction?: string; // For reaction events
 	};
 	target?: {
 		id: string;
@@ -65,7 +77,10 @@ export class NextcloudChannel implements Channel {
 	readonly id = "nextcloud";
 	readonly name = "Nextcloud Talk";
 	readonly capabilities: ChannelCapabilities = {
-		threads: false,
+		// Talk 24+ supports threads on the Bot API (threadTitle/threadId on
+		// sendMessage, threadId in webhook payloads). We join threads but
+		// never create them (see enableThreads).
+		threads: true,
 		richText: true,
 		attachments: false,
 		buttons: false,
@@ -85,6 +100,8 @@ export class NextcloudChannel implements Channel {
 	private rejectedUsers = new Set<string>();
 	// Phase 6: Database for intro tracking
 	private db: Database | null = null;
+	// Talk 24+: cached ask-features bitmask, null until probed or on failure
+	private botFeatures: number | null = null;
 
 	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
@@ -134,6 +151,11 @@ export class NextcloudChannel implements Channel {
 
 			this.connectionState = "connected";
 			console.log(`[nextcloud] Webhook server listening on :${port}${webhookPath}`);
+
+			// Talk 24+: probe advertised bot features (webhook/response/event/reaction).
+			// Fire-and-forget: the result only feeds logs and warnings, and connect()
+			// must not fail on servers that predate ask-features.
+			void this.queryBotFeatures();
 
 			// Phase 6: Send proactive intro if enabled and first run
 			if (this.config.sendIntro) {
@@ -246,7 +268,14 @@ export class NextcloudChannel implements Channel {
 			throw new Error(`Invalid conversation ID (no room token): ${conversationId}`);
 		}
 
-		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId);
+		// A "thread{N}" suffix is a real Talk thread root; map it back to the
+		// numeric threadId for the bot sendMessage call so responses land in
+		// the thread instead of the room's top level.
+		const suffix = parsed.slice(roomToken.length + 1);
+		const threadMatch = /^thread(\d+)$/.exec(suffix);
+		const threadId = threadMatch ? parseInt(threadMatch[1], 10) : undefined;
+
+		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId, threadId);
 		if (!success) {
 			throw new Error("Failed to post message to Nextcloud");
 		}
@@ -260,76 +289,6 @@ export class NextcloudChannel implements Channel {
 		};
 	}
 
-	// Phase 2: Edit a previously posted message (for progressive updates)
-	async editMessage(roomToken: string, messageId: string, newText: string): Promise<boolean> {
-		// Fix #17: Validate and sanitize talkServer config
-		let talkServer = this.config.talkServer.trim();
-		if (talkServer.startsWith("http://")) {
-			talkServer = talkServer.slice(7);
-		} else if (talkServer.startsWith("https://")) {
-			talkServer = talkServer.slice(8);
-		}
-		if (talkServer.endsWith("/")) {
-			talkServer = talkServer.slice(0, -1);
-		}
-
-		// Fix #17: URL-encode parameters
-		const encodedRoomToken = encodeURIComponent(roomToken);
-		const encodedMessageId = encodeURIComponent(String(messageId));
-		const url = `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/${encodedRoomToken}/message/${encodedMessageId}`;
-
-		const bodyStr = JSON.stringify({ message: newText });
-		const random = randomUUID().replace(/-/g, "");
-		const sig = this.signRequest(random, newText);
-
-		// Phase 2: Retry/backoff for message editing
-		const maxRetries = 2;
-		for (let attempt = 0; attempt < maxRetries; attempt++) {
-			try {
-				const res = await fetch(url, {
-					method: "PUT",
-					headers: {
-						"Content-Type": "application/json",
-						"OCS-APIRequest": "true",
-						"X-Nextcloud-Talk-Bot-Random": random,
-						"X-Nextcloud-Talk-Bot-Signature": sig,
-					},
-					body: bodyStr,
-				});
-
-				if (res.ok) {
-					return true;
-				}
-
-				if (res.status >= 500 && res.status < 600 && attempt < maxRetries - 1) {
-					// Server error - retry with exponential backoff plus jitter
-					const base = 1000 * Math.pow(2, attempt);
-					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
-					console.log(`[nextcloud] Message edit error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
-					await this.sleep(delayMs);
-					continue;
-				}
-
-				// Non-retryable error
-				const text = await res.text();
-				console.error(`[nextcloud] Message edit error: ${res.status} – ${text.slice(0, 200)}`);
-				return false;
-			} catch (err) {
-				if (attempt < maxRetries - 1) {
-					const base = 1000 * Math.pow(2, attempt);
-					const delayMs = Math.floor(base * (0.5 + Math.random()));
-					console.log(`[nextcloud] Network error editing message, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
-					await this.sleep(delayMs);
-				} else {
-					console.error("[nextcloud] Network error editing message:", err);
-					return false;
-				}
-			}
-		}
-
-		return false;
-	}
-
 	onMessage(handler: (message: InboundMessage) => Promise<void>): void {
 		this.messageHandler = handler;
 	}
@@ -338,21 +297,94 @@ export class NextcloudChannel implements Channel {
 		return this.connectionState === "connected";
 	}
 
-	// Phase 2: Configuration getters for enhanced interactions
-	getEnableProgressiveUpdates(): boolean {
-		return this.config.enableProgressiveUpdates ?? true;
-	}
-
+	// Configuration getters for interaction features
 	getEnableFeedback(): boolean {
 		return this.config.enableFeedback ?? true;
 	}
 
-	getProgressiveUpdateThrottleMs(): number {
-		return this.config.progressiveUpdateThrottleMs ?? 1000;
+	getEnableThreads(): boolean {
+		return this.config.enableThreads ?? true;
 	}
 
 	getConnectionState(): ConnectionState {
 		return this.connectionState;
+	}
+
+	/**
+	 * Query the server-side bot feature bitmask (Talk 24+, bot-features-api).
+	 * Best-effort probe: failures leave botFeatures null and are logged, never
+	 * thrown, so callers (connect) are unaffected on older Talk releases.
+	 */
+	async queryBotFeatures(): Promise<number | null> {
+		try {
+			// Fix #17 pattern: sanitize talkServer the same way postToNextcloud does
+			let talkServer = this.config.talkServer.trim();
+			if (talkServer.startsWith("http://")) {
+				talkServer = talkServer.slice(7);
+			} else if (talkServer.startsWith("https://")) {
+				talkServer = talkServer.slice(8);
+			}
+			if (talkServer.endsWith("/")) {
+				talkServer = talkServer.slice(0, -1);
+			}
+			const url = `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1/bot/ask-features`;
+
+			// ask-features signs HMAC(random + room token), same scheme as the
+			// other outbound bot calls (Fix #18 asymmetry).
+			const bodyStr = JSON.stringify({ token: this.config.roomToken });
+			const random = randomUUID().replace(/-/g, "");
+			const sig = this.signRequest(random, this.config.roomToken);
+
+			const res = await fetch(url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"OCS-APIRequest": "true",
+					"X-Nextcloud-Talk-Bot-Random": random,
+					"X-Nextcloud-Talk-Bot-Signature": sig,
+				},
+				body: bodyStr,
+			});
+
+			if (!res.ok) {
+				console.warn(`[nextcloud] ask-features probe failed: ${res.status}`);
+				return null;
+			}
+
+			const json = (await res.json()) as { ocs?: { data?: { features?: number } } };
+			const features = json?.ocs?.data?.features;
+			if (typeof features !== "number") {
+				console.warn("[nextcloud] ask-features response missing features bitmask");
+				return null;
+			}
+
+			this.botFeatures = features;
+
+			const featureNames: Array<[string, number]> = [
+				["webhook", NEXTCLOUD_BOT_FEATURES.WEBHOOK],
+				["response", NEXTCLOUD_BOT_FEATURES.RESPONSE],
+				["event", NEXTCLOUD_BOT_FEATURES.EVENT],
+				["reaction", NEXTCLOUD_BOT_FEATURES.REACTION],
+			];
+			const names = featureNames.filter(([, bit]) => (features & bit) !== 0).map(([name]) => name);
+			console.log(`[nextcloud] Bot features: ${names.join(", ") || "none"} (0b${features.toString(2)})`);
+
+			if (this.getEnableFeedback() && (features & NEXTCLOUD_BOT_FEATURES.REACTION) === 0) {
+				console.warn(
+					"[nextcloud] enable_feedback is on but the server does not advertise the reaction feature; reaction feedback will not fire",
+				);
+			}
+
+			return features;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[nextcloud] ask-features probe error: ${msg}`);
+			return null;
+		}
+	}
+
+	getBotFeatures(): number | null {
+		return this.botFeatures;
 	}
 
 	private async handleWebRequest(req: Request, webhookPath: string): Promise<Response> {
@@ -552,10 +584,11 @@ export class NextcloudChannel implements Channel {
 		const msgId = !isNaN(msgIdNum) ? msgIdNum : undefined;
 
 		// Fix: Time-window coalescing for session continuity
-		// If the Talk payload includes a parentMessageId (explicit reply),
-		// use the parent's ID as the thread root. Otherwise check for a
-		// recent active session in this room within the configured window
-		// (default 30 minutes) to continue the prior conversation.
+		// Precedence: a real Talk thread (Talk 24+ payloads carry object.threadId
+		// when the message lives in one) beats an explicit reply, which beats the
+		// time-window lookup. Thread roots use a "thread{N}" namespace so they
+		// can never collide with message-ID roots, and send() maps them back to
+		// the numeric threadId on outbound posts.
 		const parentMessageIdNum = typeof object?.parentMessageId === "number"
 			? object.parentMessageId
 			: typeof object?.parentMessageId === "string"
@@ -563,8 +596,20 @@ export class NextcloudChannel implements Channel {
 				: NaN;
 		const parentMessageId = !isNaN(parentMessageIdNum) ? parentMessageIdNum : undefined;
 
+		const threadIdNum = typeof object?.threadId === "number"
+			? object.threadId
+			: typeof object?.threadId === "string"
+				? parseInt(object.threadId, 10)
+				: NaN;
+		const threadId = !isNaN(threadIdNum) ? threadIdNum : undefined;
+
 		let threadRoot: number | string;
-		if (parentMessageId !== undefined) {
+		let activeThreadId: number | undefined;
+		if (threadId !== undefined && this.getEnableThreads()) {
+			// Message lives in a real Talk thread — scope the session to it
+			threadRoot = `thread${threadId}`;
+			activeThreadId = threadId;
+		} else if (parentMessageId !== undefined) {
 			// Explicit reply — use the parent as the thread root
 			threadRoot = parentMessageId;
 		} else {
@@ -601,6 +646,9 @@ export class NextcloudChannel implements Channel {
 			metadata: {
 				nextcloudRoomToken: roomToken,
 				nextcloudMessageId: msgId,
+				// Only set when the session actually scoped to the thread, so
+				// enableThreads: false never routes responses into threads
+				nextcloudThreadId: activeThreadId,
 				nextcloudServer: this.config.talkServer,
 			},
 		};
@@ -656,7 +704,7 @@ export class NextcloudChannel implements Channel {
 		return hmac.digest("hex");
 	}
 
-	private async postToNextcloud(roomToken: string, message: string, replyTo?: string): Promise<boolean> {
+	private async postToNextcloud(roomToken: string, message: string, replyTo?: string, threadId?: number): Promise<boolean> {
 		// Fix #17: Validate and sanitize talkServer config
 		let talkServer = this.config.talkServer.trim();
 		// Remove scheme if present
@@ -680,6 +728,9 @@ export class NextcloudChannel implements Channel {
 			if (!isNaN(replyId)) {
 				payload.replyTo = replyId;
 			}
+		}
+		if (threadId !== undefined) {
+			payload.threadId = threadId;
 		}
 
 		const bodyStr = JSON.stringify(payload);

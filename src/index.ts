@@ -415,10 +415,10 @@ async function main(): Promise<void> {
 			botId: channelsConfig.nextcloud.bot_id,
 			sessionWindowMinutes: channelsConfig.nextcloud.session_window_minutes,
 			ownerUserId: channelsConfig.nextcloud.owner_user_id,
-			// Phase 2: Enhanced interactions configuration
-			enableProgressiveUpdates: channelsConfig.nextcloud.enable_progressive_updates,
+			// Enhanced interactions configuration
 			enableFeedback: channelsConfig.nextcloud.enable_feedback,
-			progressiveUpdateThrottleMs: channelsConfig.nextcloud.progressive_update_throttle_ms,
+			// Talk 24+: join the thread a message belongs to
+			enableThreads: channelsConfig.nextcloud.enable_threads,
 			// Phase 6: Proactive intro configuration
 			sendIntro: channelsConfig.nextcloud.send_intro,
 		}, runtime.sessionStore);
@@ -544,9 +544,7 @@ async function main(): Promise<void> {
 	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
 	// Phase 2: Pass Nextcloud configuration to interaction factory
 	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel, {
-		enableProgressiveUpdates: channelsConfig.nextcloud?.enable_progressive_updates,
 		enableFeedback: channelsConfig.nextcloud?.enable_feedback,
-		progressiveUpdateThrottleMs: channelsConfig.nextcloud?.progressive_update_throttle_ms,
 	}));
 	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));
 

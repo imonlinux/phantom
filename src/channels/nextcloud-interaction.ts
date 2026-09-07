@@ -5,28 +5,25 @@
  * orchestration code from `src/index.ts` (status reactions on the user's
  * message via the Talk Bot reactions API) into an adapter factory.
  *
- * Phase 2: Add progressive updates and feedback mechanism.
- *
  * This adapter provides:
  * - Status reactions: 👀 queued → 🧠 thinking → 🔧 tool → removed on done / ⚠ error
  *   (Talk renders every reaction change as a chat system message, so a
  *   successful turn clears the reaction instead of parking a ✅ on the
  *   message; see issue #1)
- * - Progressive updates: "Working on it..." → tool activity → final response
  * - Feedback mechanism: "Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)"
+ * - Thread awareness: responses follow the conversation's Talk thread when
+ *   the session is thread-scoped (Talk 24+)
  *
  * Nextcloud limitations (vs Telegram):
  * - No inline keyboards → use reaction-based feedback instead
- * - Message editing available but complex → use new message updates for progress
+ * - Bot POST responses carry no message ID and no edit endpoint exists →
+ *   progressive updates are impossible; each update would be a new message
  * - No typing indicators → status reactions serve as activity indicator
  *
  * Configuration options (from NextcloudChannelConfig):
- * - enableProgressiveUpdates: Enable progressive "Working on it..." (default: true)
  * - enableFeedback: Enable feedback collection via reactions (default: true)
- * - progressiveUpdateThrottleMs: Throttle between updates (default: 1000ms)
  */
 
-import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
 import type { NextcloudChannel } from "./nextcloud.ts";
 import type { InboundMessage } from "./types.ts";
@@ -55,9 +52,7 @@ export const NEXTCLOUD_EMOJIS: StatusEmojis = {
 export function createNextcloudInteractionFactory(
 	nextcloudChannel: NextcloudChannel | null,
 	config?: {
-		enableProgressiveUpdates?: boolean;
 		enableFeedback?: boolean;
-		progressiveUpdateThrottleMs?: number;
 	},
 ): ChannelInteractionFactory {
 	return (msg: InboundMessage): ChannelInteractionInstance | null => {
@@ -65,6 +60,7 @@ export function createNextcloudInteractionFactory(
 
 		const roomToken = msg.metadata.nextcloudRoomToken as string | undefined;
 		const messageId = msg.metadata.nextcloudMessageId as number | undefined;
+		const threadId = msg.metadata.nextcloudThreadId as number | undefined;
 
 		// Both must be set for reactions; otherwise this turn gets no
 		// channel-specific signaling. Return an empty instance so the
@@ -104,49 +100,14 @@ export function createNextcloudInteractionFactory(
 		};
 		statusReactions.setQueued();
 
-		// Phase 2: Progressive updates - DISABLED for Nextcloud
-		// Note: Nextcloud's postToNextcloud() returns boolean, not message ID
-		// Without message ID, we can't use the editMessage() API to update progress
-		// Progressive updates would create multiple messages instead of editing one
-		// Therefore, progressive updates are disabled for Nextcloud
-		let progressStream: ProgressStream | undefined;
-		// Explicitly disable even if config enables it
-		if (false && config?.enableProgressiveUpdates !== false) {
-			progressStream = createProgressStream({
-				adapter: {
-					postMessage: async (text) => {
-						await nc.postToNextcloud(rt, text);
-						return "";
-					},
-					updateMessage: async (_msgId, _updatedText) => {
-						// Not implemented - would require message ID tracking
-						console.warn("[nextcloud] Progressive updates not supported - message editing requires message ID");
-					},
-				},
-				onError: (err) => {
-					const errMsg = err instanceof Error ? err.message : String(err);
-					console.warn(`[nextcloud] Progress stream error: ${errMsg}`);
-				},
-				onFinish: async (_msgId, text) => {
-					const enableFeedback = config?.enableFeedback !== false;
-					if (enableFeedback) {
-						const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
-						await nc.postToNextcloud(rt, text + feedbackPrompt);
-					} else {
-						await nc.postToNextcloud(rt, text);
-					}
-				},
-			});
-		}
+		// Thread-scoped sessions (Talk 24+) post responses back into the Talk
+		// thread; undefined threadId keeps the plain room-level behavior.
+		const deliverText = async (text: string): Promise<void> => {
+			await nc.postToNextcloud(rt, text, undefined, threadId);
+		};
 
 		return {
 			statusReactions,
-			progressStream,
-
-			async onTurnStart(): Promise<void> {
-				// Phase 2: Start progressive updates
-				await progressStream?.start();
-			},
 
 			onRuntimeEvent(event): void {
 				switch (event.type) {
@@ -155,11 +116,6 @@ export function createNextcloudInteractionFactory(
 						break;
 					case "tool_use":
 						statusReactions.setTool(event.tool);
-						// Phase 2: Add tool activity to progress stream
-						if (progressStream) {
-							const summary = formatToolActivity(event.tool, event.input);
-							progressStream.addToolActivity(event.tool, summary);
-						}
 						break;
 					case "error":
 						statusReactions.setError();
@@ -173,18 +129,12 @@ export function createNextcloudInteractionFactory(
 			},
 
 			async deliverResponse({ text }): Promise<boolean> {
-				// Phase 2: Use progressive updates if enabled
-				if (progressStream) {
-					await progressStream.finish(text);
-					return true;
-				}
-				// Fallback: direct response delivery
 				const enableFeedback = config?.enableFeedback !== false;
 				if (enableFeedback) {
 					const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
-					await nc.postToNextcloud(rt, text + feedbackPrompt);
+					await deliverText(text + feedbackPrompt);
 				} else {
-					await nc.postToNextcloud(rt, text);
+					await deliverText(text);
 				}
 				return true;
 			},

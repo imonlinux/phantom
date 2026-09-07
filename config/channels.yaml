@@ -15,8 +15,8 @@ nextcloud:
   bot_id: '${NEXTCLOUD_BOT_ID}'
   webhook_path: ${NEXTCLOUD_WEBHOOK_PATH}
   session_window_minutes: ${NEXTCLOUD_SESSION_TIMEOUT}
-  enable_progressive_updates: ${NEXTCLOUD_PROGRESSIVE_UPDATES}
   enable_feedback: ${NEXTCLOUD_FEEDBACK}
+  enable_threads: ${NEXTCLOUD_ENABLE_THREADS}
 
 telegram:
   enabled: true

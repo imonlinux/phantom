@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { NextcloudChannel, type NextcloudChannelConfig } from "../nextcloud.ts";
+import { setFeedbackHandler, type FeedbackSignal } from "../feedback.ts";
 import type { SessionStore } from "../../agent/session-store.ts";
 
 // Test constants
@@ -1024,6 +1025,100 @@ describe("NextcloudChannel", () => {
 			// Different user should trigger a new rejection
 			await rejectNonOwner("intruder2", ROOM_TOKEN);
 			expect(rejectionCount).toBe(2);
+		});
+	});
+
+	describe("Reaction feedback webhook routing (issue #1)", () => {
+		let feedbackSignals: FeedbackSignal[];
+
+		beforeEach(() => {
+			feedbackSignals = [];
+			setFeedbackHandler((signal) => {
+				feedbackSignals.push(signal);
+			});
+		});
+
+		afterEach(() => {
+			setFeedbackHandler(null as unknown as (signal: FeedbackSignal) => void);
+		});
+
+		function makeChannel(config: Partial<NextcloudChannelConfig> = {}): NextcloudChannel {
+			return new NextcloudChannel({
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				...config,
+			});
+		}
+
+		function reactionPayload(type: string, actorId: string, reaction: string) {
+			return {
+				type,
+				actor: { type: "Person", id: actorId, name: "Actor" },
+				object: { id: 123, type: "react", reaction },
+				target: { id: ROOM_TOKEN, name: "Test Room" },
+			};
+		}
+
+		async function process(channel: NextcloudChannel, payload: ReturnType<typeof reactionPayload>) {
+			return (channel as unknown as {
+				processWebhookPayload: (p: unknown) => Promise<{ status?: number; error?: string }>;
+			}).processWebhookPayload(payload);
+		}
+
+		test("routes a human Like reaction to the feedback handler", async () => {
+			const channel = makeChannel();
+			const result = await process(channel, reactionPayload("Like", "users/james", "👍"));
+			expect(result.error).toBeUndefined();
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].type).toBe("positive");
+			expect(feedbackSignals[0].userId).toBe("users/james");
+			expect(feedbackSignals[0].source).toBe("reaction");
+		});
+
+		test("ignores reactions from bot actors (bots/ prefix)", async () => {
+			const channel = makeChannel();
+			// ✅ is in the feedback map, so without the bot filter this would register
+			await process(channel, reactionPayload("Like", "bots/bot-ac8d23d39b8f4da2cc1305f69a11e05d5a7d4129", "✅"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores reactions from bot actors (bot- prefix without bots/)", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "bot-abc123", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores emojis outside the feedback map", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "users/james", "👀"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("maps negative reactions to negative feedback", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "users/james", "👎"));
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].type).toBe("negative");
+		});
+
+		test("ignores reaction removals (Undo type)", async () => {
+			const channel = makeChannel();
+			const result = await process(channel, reactionPayload("Undo", "users/james", "👍"));
+			expect(result.error).toBeUndefined();
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("does not route the legacy React type (Talk never sends it)", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("React", "users/james", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores reactions from non-owner when ownerUserId is configured", async () => {
+			const channel = makeChannel({ ownerUserId: "users/james" });
+			await process(channel, reactionPayload("Like", "users/someoneelse", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
 		});
 	});
 });

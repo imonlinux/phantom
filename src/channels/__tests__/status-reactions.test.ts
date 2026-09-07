@@ -6,6 +6,25 @@ import {
 	resolveToolEmoji,
 } from "../status-reactions.ts";
 
+// Shared mock adapter state, hoisted to module scope so the stall-escalation
+// and clear describe blocks can reuse the same fixture.
+let addCalls: string[];
+let removeCalls: string[];
+let adapter: ReactionAdapter;
+
+beforeEach(() => {
+	addCalls = [];
+	removeCalls = [];
+	adapter = {
+		addReaction: mock(async (emoji: string) => {
+			addCalls.push(emoji);
+		}),
+		removeReaction: mock(async (emoji: string) => {
+			removeCalls.push(emoji);
+		}),
+	};
+});
+
 describe("resolveToolEmoji", () => {
 	test("returns coding emoji for read tool", () => {
 		expect(resolveToolEmoji("Read", DEFAULT_EMOJIS)).toBe("computer");
@@ -37,23 +56,6 @@ describe("resolveToolEmoji", () => {
 });
 
 describe("createStatusReactionController", () => {
-	let addCalls: string[];
-	let removeCalls: string[];
-	let adapter: ReactionAdapter;
-
-	beforeEach(() => {
-		addCalls = [];
-		removeCalls = [];
-		adapter = {
-			addReaction: mock(async (emoji: string) => {
-				addCalls.push(emoji);
-			}),
-			removeReaction: mock(async (emoji: string) => {
-				removeCalls.push(emoji);
-			}),
-		};
-	});
-
 	test("setQueued fires immediately with eyes emoji", async () => {
 		const controller = createStatusReactionController({
 			adapter,
@@ -178,5 +180,81 @@ describe("createStatusReactionController", () => {
 		await new Promise((r) => setTimeout(r, 50));
 		expect(addCalls).toContain("wave");
 		controller.dispose();
+	});
+});
+
+describe("stall escalation (issue #1: hung-turn oscillator)", () => {
+	test("escalates to stallHard once and then stays silent", async () => {
+		let callCount = 0;
+		const countingAdapter: ReactionAdapter = {
+			addReaction: mock(async () => {
+				callCount++;
+			}),
+			removeReaction: mock(async () => {
+				callCount++;
+			}),
+		};
+		const controller = createStatusReactionController({
+			adapter: countingAdapter,
+			timing: { debounceMs: 0, stallSoftMs: 40, stallHardMs: 80 },
+		});
+
+		// t=0: queued fires immediately (1 call)
+		controller.setQueued();
+		// t=60: stallSoft fired at t=40 (remove eyes + add hourglass = 3 calls)
+		await new Promise((r) => setTimeout(r, 60));
+		expect(callCount).toBe(3);
+		// t=120: stallHard fired at t=80 (remove hourglass + add exclamation = 5 calls)
+		await new Promise((r) => setTimeout(r, 60));
+		expect(callCount).toBe(5);
+
+		// The old implementation re-armed each stall timer from the other,
+		// flipping the two emojis forever on a turn that never finishes.
+		// The ladder must be terminal: no further calls.
+		await new Promise((r) => setTimeout(r, 250));
+		expect(callCount).toBe(5);
+		controller.dispose();
+	});
+
+	test("runtime transitions re-arm the stall ladder", async () => {
+		const controller = createStatusReactionController({
+			adapter,
+			timing: { debounceMs: 0, stallSoftMs: 40, stallHardMs: 80 },
+		});
+		controller.setQueued();
+		await new Promise((r) => setTimeout(r, 30));
+		// Reset the ladder at t=30: soft now fires at t=70
+		controller.setThinking();
+		await new Promise((r) => setTimeout(r, 60));
+		expect(addCalls).toContain("hourglass_flowing_sand");
+		controller.dispose();
+	});
+});
+
+describe("clear (issue #1: no terminal emoji on Talk)", () => {
+	test("clear removes the current reaction and finishes", async () => {
+		const controller = createStatusReactionController({
+			adapter,
+			timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+		});
+		controller.setQueued();
+		await new Promise((r) => setTimeout(r, 50));
+		await controller.clear();
+		expect(removeCalls).toContain("eyes");
+		const callsAfterClear = addCalls.length + removeCalls.length;
+		controller.setThinking();
+		await new Promise((r) => setTimeout(r, 50));
+		expect(addCalls.length + removeCalls.length).toBe(callsAfterClear);
+		controller.dispose();
+	});
+
+	test("clear with no active reaction is a no-op", async () => {
+		const controller = createStatusReactionController({
+			adapter,
+			timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+		});
+		await controller.clear();
+		expect(addCalls).toHaveLength(0);
+		expect(removeCalls).toHaveLength(0);
 	});
 });

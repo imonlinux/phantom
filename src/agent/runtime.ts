@@ -292,9 +292,25 @@ export class AgentRuntime {
 			}
 		};
 
+		// Why: the SDK's message iterator can, in rare post-abort states, never
+		// settle — the child process is killed but the stream's pending next()
+		// hangs, leaving the turn (and its session lock) stranded forever with
+		// no delivery. Racing the query against the abort signal guarantees an
+		// interrupted turn always reaches classification and delivery, no
+		// matter what the SDK's stream does. The no-op catches keep the losing
+		// side's late rejection from surfacing as an unhandled rejection.
+		const abortGate = new Promise<never>((_, reject) => {
+			controller.signal.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+				once: true,
+			});
+		});
+		abortGate.catch(() => {});
+
 		try {
 			try {
-				await runSdkQuery(isResume);
+				const queryPromise = runSdkQuery(isResume);
+				queryPromise.catch(() => {});
+				await Promise.race([queryPromise, abortGate]);
 			} catch (err: unknown) {
 				if (this.interruptRequested.has(sessionKey)) {
 					// Deliberate stop, not a fault: classified below, and no

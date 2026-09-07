@@ -11,7 +11,9 @@ nextcloud:
   shared_secret: ${NEXTCLOUD_SHARED_SECRET}
   talk_server: ${NEXTCLOUD_TALK_SERVER}
   room_token: ${NEXTCLOUD_ROOM_TOKEN}
-#  owner_user_id: ${NEXTCLOUD_USER_ID}
+  # Owner gate: set to your Nextcloud user id (users/<name>) to restrict the
+  # bot (and reaction feedback) to you; unset or empty = respond to everyone
+  owner_user_id: ${NEXTCLOUD_OWNER_USER_ID}
   bot_id: '${NEXTCLOUD_BOT_ID}'
   webhook_path: ${NEXTCLOUD_WEBHOOK_PATH}
   session_window_minutes: ${NEXTCLOUD_SESSION_TIMEOUT}

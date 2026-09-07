@@ -1196,11 +1196,22 @@ describe("NextcloudChannel", () => {
 			}).processWebhookPayload(payload);
 		}
 
-		function threadPayload(threadId?: number | string, parentMessageId?: number | string) {
+		function threadPayload(threadId?: number | string, parentMessageId?: number | string, inReplyToParentId?: number | string) {
 			return {
 				type: "Create",
 				actor: { type: "Person", id: "users/james", name: "James" },
-				object: { id: 900, type: "Note", content: "hello", threadId, parentMessageId },
+				object: {
+					id: 900,
+					type: "Note",
+					content: "hello",
+					threadId,
+					parentMessageId,
+					// spreed BotService wraps the parent Note inside inReplyTo
+					// for plain "Reply" payloads (issue #2)
+					...(inReplyToParentId !== undefined
+						? { inReplyTo: { type: "Note", object: { id: inReplyToParentId } } }
+						: {}),
+				},
 				target: { id: ROOM_TOKEN, name: "Test Room" },
 			};
 		}
@@ -1239,6 +1250,40 @@ describe("NextcloudChannel", () => {
 			await process(ch, threadPayload(undefined, "55"));
 			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:55`);
 			expect(seen[0].metadata?.nextcloudThreadId).toBeUndefined();
+		});
+
+		test("roots the session on object.inReplyTo.object.id for plain Reply payloads", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(undefined, undefined, 555));
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:555`);
+			expect(seen[0].metadata?.nextcloudThreadId).toBeUndefined();
+		});
+
+		test("parses numeric-string inReplyTo parent ids", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(undefined, undefined, "555"));
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:555`);
+		});
+
+		test("threadId wins over inReplyTo (threaded replies carry both)", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(77, undefined, 555));
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:thread77`);
+		});
+
+		test("inReplyTo with a non-numeric parent id falls through to the window root", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(undefined, undefined, "not-a-number"));
+			// No session store wired: time-window lookup unavailable, root is "room"
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:room`);
 		});
 
 		test("enableThreads: false keeps legacy behavior and drops the thread from metadata", async () => {

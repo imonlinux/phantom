@@ -148,7 +148,7 @@ describe("createNextcloudInteractionFactory", () => {
 		const factory = createNextcloudInteractionFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		instance?.onRuntimeEvent?.({ type: "thinking", sessionId: "s1" });
+		instance?.onRuntimeEvent?.({ type: "thinking" });
 		await new Promise((r) => setTimeout(r, 600));
 		const thinkingCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.thinking && c.add === true);
 		expect(thinkingCall).toBeDefined();
@@ -163,7 +163,6 @@ describe("createNextcloudInteractionFactory", () => {
 			type: "tool_use",
 			tool: "Read",
 			input: { file_path: "/x.ts" },
-			sessionId: "s1",
 		});
 		await new Promise((r) => setTimeout(r, 600));
 		// Read maps to coding via resolveToolEmoji

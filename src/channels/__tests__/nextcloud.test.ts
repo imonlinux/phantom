@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { NextcloudChannel, NEXTCLOUD_BOT_FEATURES, type NextcloudChannelConfig } from "../nextcloud.ts";
 import { setFeedbackHandler, type FeedbackSignal } from "../feedback.ts";
+import { registerInFlightMessage, unregisterInFlightMessage } from "../interrupt.ts";
 import type { InboundMessage } from "../types.ts";
 import type { SessionStore } from "../../agent/session-store.ts";
 
@@ -1177,6 +1178,75 @@ describe("NextcloudChannel", () => {
 			const channel = makeChannel({ ownerUserId: "users/james" });
 			await process(channel, reactionPayload("Like", "users/someoneelse", "👍"));
 			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("stop reaction on the in-flight message fires onInterrupt", async () => {
+			const channel = makeChannel();
+			const interrupts: Array<{ conversationId: string; messageId: number }> = [];
+			channel.onInterrupt = (t) => interrupts.push(t);
+			registerInFlightMessage("nextcloud", 123, {
+				channelId: "nextcloud",
+				conversationId: `nextcloud:${ROOM_TOKEN}:room`,
+			});
+
+			try {
+				const result = await process(channel, reactionPayload("Like", "users/james", "🛑"));
+				expect(result.error).toBeUndefined();
+				expect(interrupts).toHaveLength(1);
+				expect(interrupts[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:room`);
+				expect(interrupts[0].messageId).toBe(123);
+				// Stop emoji is never feedback
+				expect(feedbackSignals).toHaveLength(0);
+			} finally {
+				unregisterInFlightMessage("nextcloud", 123);
+			}
+		});
+
+		test("stop reaction on a message with no active turn does not fire onInterrupt", async () => {
+			const channel = makeChannel();
+			const interrupts: Array<{ conversationId: string; messageId: number }> = [];
+			channel.onInterrupt = (t) => interrupts.push(t);
+
+			await process(channel, reactionPayload("Like", "users/james", "🛑"));
+			expect(interrupts).toHaveLength(0);
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("stop reaction from a non-owner is ignored", async () => {
+			const channel = makeChannel({ ownerUserId: "users/james" });
+			const interrupts: Array<{ conversationId: string; messageId: number }> = [];
+			channel.onInterrupt = (t) => interrupts.push(t);
+			registerInFlightMessage("nextcloud", 123, {
+				channelId: "nextcloud",
+				conversationId: `nextcloud:${ROOM_TOKEN}:room`,
+			});
+
+			try {
+				await process(channel, reactionPayload("Like", "users/someoneelse", "🛑"));
+				expect(interrupts).toHaveLength(0);
+			} finally {
+				unregisterInFlightMessage("nextcloud", 123);
+			}
+		});
+
+		test("custom interrupt_reaction overrides the default stop emoji", async () => {
+			const channel = makeChannel({ interruptReaction: "⏹" });
+			const interrupts: Array<{ conversationId: string; messageId: number }> = [];
+			channel.onInterrupt = (t) => interrupts.push(t);
+			registerInFlightMessage("nextcloud", 123, {
+				channelId: "nextcloud",
+				conversationId: `nextcloud:${ROOM_TOKEN}:room`,
+			});
+
+			try {
+				// Custom emoji interrupts; the default 🛑 no longer does
+				await process(channel, reactionPayload("Like", "users/james", "⏹"));
+				expect(interrupts).toHaveLength(1);
+				await process(channel, reactionPayload("Like", "users/james", "🛑"));
+				expect(interrupts).toHaveLength(1);
+			} finally {
+				unregisterInFlightMessage("nextcloud", 123);
+			}
 		});
 	});
 

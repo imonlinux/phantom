@@ -14,6 +14,7 @@ import { Database } from "bun:sqlite";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import type { SessionStore } from "../agent/session-store.ts";
 import { emitFeedback } from "./feedback.ts";
+import { findInFlightMessage } from "./interrupt.ts";
 
 export type NextcloudChannelConfig = {
 	sharedSecret: string;
@@ -30,6 +31,9 @@ export type NextcloudChannelConfig = {
 	// The bot only ever joins existing threads via threadId on sendMessage;
 	// it cannot create threads (bot POST responses carry no message ID).
 	enableThreads?: boolean;
+	// Reaction that cancels the running turn when applied to the in-flight
+	// message. Defaults to the stop sign; override or disable via config.
+	interruptReaction?: string;
 };
 
 // Bot feature bitmask from POST /bot/ask-features (Talk 24+, requires the
@@ -101,6 +105,9 @@ export class NextcloudChannel implements Channel {
 	private config: NextcloudChannelConfig;
 	private messageHandler: ((message: InboundMessage) => Promise<void>) | null = null;
 	private connectionState: ConnectionState = "disconnected";
+	// Assigned by the composition root (index.ts) to reach the runtime's
+	// interrupt entry point; the channel itself never imports the runtime
+	onInterrupt: ((target: { conversationId: string; messageId: number }) => void) | null = null;
 	private server: ReturnType<typeof Bun.serve> | null = null;
 	// Fix #1: Replay attack protection
 	private nonceCache: Map<string, NonceEntry> = new Map();
@@ -982,6 +989,21 @@ export class NextcloudChannel implements Channel {
 		// Gate reactions by owner (when owner_user_id is configured)
 		if (!this.isOwner(actorId)) {
 			console.log(`[nextcloud] Ignoring reaction from non-owner ${actorId}`);
+			return;
+		}
+
+		// Stop-emoji reaction on the in-flight message cancels the running
+		// turn (agent interrupt). Reactions on any other message fall through
+		// to feedback mapping below; the stop emoji itself is never feedback.
+		const stopEmoji = (this.config.interruptReaction ?? "🛑").replaceAll("\uFE0F", "");
+		if (reaction.replaceAll("\uFE0F", "") === stopEmoji) {
+			const target = findInFlightMessage(this.id, Number(messageId));
+			if (target && this.onInterrupt) {
+				console.log(`[nextcloud] Interrupt requested via stop reaction on message ${messageId}`);
+				this.onInterrupt({ conversationId: target.conversationId, messageId: Number(messageId) });
+			} else {
+				console.log(`[nextcloud] Stop reaction on message ${messageId} but no active turn`);
+			}
 			return;
 		}
 

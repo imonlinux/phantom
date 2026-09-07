@@ -28,6 +28,7 @@ import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./in
 import type { NextcloudChannel } from "./nextcloud.ts";
 import type { InboundMessage } from "./types.ts";
 import { createStatusReactionController, type StatusEmojis, type StatusReactionController } from "./status-reactions.ts";
+import { registerInFlightMessage, unregisterInFlightMessage } from "./interrupt.ts";
 
 // Phase 1: Enhanced emoji map for Nextcloud (matches Slack defaults)
 export const NEXTCLOUD_EMOJIS: StatusEmojis = {
@@ -100,6 +101,14 @@ export function createNextcloudInteractionFactory(
 		};
 		statusReactions.setQueued();
 
+		// Anchor this turn's in-flight message so a stop-emoji reaction on it
+		// can be resolved back to the conversation (agent interrupt). The
+		// dispose() cleanup always runs, even on throw (issue: agent interrupt)
+		registerInFlightMessage("nextcloud", mid, {
+			channelId: "nextcloud",
+			conversationId: msg.conversationId,
+		});
+
 		// Thread-scoped sessions (Talk 24+) post responses back into the Talk
 		// thread; undefined threadId keeps the plain room-level behavior.
 		const deliverText = async (text: string): Promise<void> => {
@@ -140,6 +149,7 @@ export function createNextcloudInteractionFactory(
 			},
 
 			dispose(): void {
+				unregisterInFlightMessage("nextcloud", mid);
 				statusReactions.dispose();
 			},
 		};

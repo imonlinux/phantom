@@ -638,7 +638,15 @@ export class TelegramChannel implements Channel {
 
 		try {
 			const { Telegraf } = await import("telegraf");
-			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
+			// handlerTimeout must be disabled: Telegraf wraps the whole middleware
+			// chain (including the full agent turn) in a 90s p-timeout by default.
+			// The webhook already answers 200 immediately, so the wrapper protects
+			// nothing; it only rejects long turns mid-flight and logs them as
+			// failures even though the turn completes and delivers. Infinity makes
+			// p-timeout skip its timer entirely (0 would reject instantly).
+			this.bot = new Telegraf(this.config.botToken, {
+				handlerTimeout: Infinity,
+			}) as unknown as TelegrafBot;
 			this.registerHandlers();
 
 			// Verify bot token works
@@ -788,7 +796,15 @@ export class TelegramChannel implements Channel {
 		this.connectionState = "connecting";
 		try {
 			const { Telegraf } = await import("telegraf");
-			this.bot = new Telegraf(this.config.botToken) as unknown as TelegrafBot;
+			// handlerTimeout must be disabled: Telegraf wraps the whole middleware
+			// chain (including the full agent turn) in a 90s p-timeout by default.
+			// The webhook already answers 200 immediately, so the wrapper protects
+			// nothing; it only rejects long turns mid-flight and logs them as
+			// failures even though the turn completes and delivers. Infinity makes
+			// p-timeout skip its timer entirely (0 would reject instantly).
+			this.bot = new Telegraf(this.config.botToken, {
+				handlerTimeout: Infinity,
+			}) as unknown as TelegrafBot;
 			this.registerHandlers();
 
 			// P8: Build allowed_updates list (reused from webhook mode)

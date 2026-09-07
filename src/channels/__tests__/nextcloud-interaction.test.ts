@@ -5,10 +5,14 @@ import type { InboundMessage } from "../types.ts";
 function makeMockNextcloudChannel() {
 	const calls = {
 		setReaction: [] as Array<{ token: string; messageId: number; emoji: string; add: boolean }>,
+		postToNextcloud: [] as Array<{ token: string; text: string }>,
 	};
 	const channel = {
 		setReaction: mock(async (token: string, messageId: number, emoji: string, add: boolean) => {
 			calls.setReaction.push({ token, messageId, emoji, add });
+		}),
+		postToNextcloud: mock(async (token: string, text: string) => {
+			calls.postToNextcloud.push({ token, text });
 		}),
 	};
 	return {
@@ -115,12 +119,16 @@ describe("createNextcloudInteractionFactory", () => {
 		expect(instance?.progressStream).toBeUndefined();
 	});
 
-	test("does NOT define deliverResponse (uses default router.send)", () => {
-		const { channel } = makeMockNextcloudChannel();
-		const factory = createNextcloudInteractionFactory(channel);
+	// Stale since Phase 2: deliverResponse IS defined and posts directly via
+	// the channel; the old assertion expected the router.send fallback.
+	test("deliverResponse posts the final text via the channel (Phase 2)", async () => {
+		const { channel, calls } = makeMockNextcloudChannel();
+		const factory = createNextcloudInteractionFactory(channel, { enableFeedback: false });
 
 		const instance = factory(makeNextcloudMessage());
-		expect(instance?.deliverResponse).toBeUndefined();
+		const delivered = await instance?.deliverResponse?.({ text: "final answer", isError: false });
+		expect(delivered).toBe(true);
+		expect(calls.postToNextcloud).toEqual([{ token: "room1", text: "final answer" }]);
 	});
 
 	test("setQueued fires the configured queued emoji on instance creation", async () => {
@@ -140,7 +148,7 @@ describe("createNextcloudInteractionFactory", () => {
 		const factory = createNextcloudInteractionFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		instance?.onRuntimeEvent?.({ type: "thinking", sessionId: "s1" });
+		instance?.onRuntimeEvent?.({ type: "thinking" });
 		await new Promise((r) => setTimeout(r, 600));
 		const thinkingCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.thinking && c.add === true);
 		expect(thinkingCall).toBeDefined();
@@ -155,7 +163,6 @@ describe("createNextcloudInteractionFactory", () => {
 			type: "tool_use",
 			tool: "Read",
 			input: { file_path: "/x.ts" },
-			sessionId: "s1",
 		});
 		await new Promise((r) => setTimeout(r, 600));
 		// Read maps to coding via resolveToolEmoji
@@ -180,5 +187,46 @@ describe("createNextcloudInteractionFactory", () => {
 
 		const instance = factory(makeNextcloudMessage());
 		expect(() => instance?.dispose?.()).not.toThrow();
+	});
+
+	test("setDone removes the reaction instead of applying a done emoji (issue #1)", async () => {
+		const { channel, calls } = makeMockNextcloudChannel();
+		const factory = createNextcloudInteractionFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await new Promise((r) => setTimeout(r, 50)); // let setQueued apply
+		await instance?.statusReactions?.setDone();
+
+		const doneAdd = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.done && c.add === true);
+		expect(doneAdd).toBeUndefined();
+		const removeCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.queued && c.add === false);
+		expect(removeCall).toBeDefined();
+	});
+
+	test("setError still leaves the error emoji", async () => {
+		const { channel, calls } = makeMockNextcloudChannel();
+		const factory = createNextcloudInteractionFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await new Promise((r) => setTimeout(r, 50)); // let setQueued apply
+		await instance?.statusReactions?.setError();
+
+		const errCall = calls.setReaction.find((c) => c.emoji === "\u26A0" && c.add === true);
+		expect(errCall).toBeDefined();
+	});
+
+	test("full lifecycle transitions then clears without a terminal emoji", async () => {
+		const { channel, calls } = makeMockNextcloudChannel();
+		const factory = createNextcloudInteractionFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		instance?.onRuntimeEvent?.({ type: "thinking" });
+		await new Promise((r) => setTimeout(r, 600)); // debounce 500ms
+		await instance?.statusReactions?.setDone();
+
+		const doneAdd = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.done && c.add === true);
+		expect(doneAdd).toBeUndefined();
+		const thinkingRemove = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.thinking && c.add === false);
+		expect(thinkingRemove).toBeDefined();
 	});
 });

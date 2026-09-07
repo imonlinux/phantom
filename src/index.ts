@@ -6,6 +6,7 @@ import { AgentRuntime } from "./agent/runtime.ts";
 import type { RuntimeEvent } from "./agent/runtime.ts";
 import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
+import { isInterruptText } from "./channels/interrupt.ts";
 import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
 import { ChannelInteractionRegistry } from "./channels/interaction-adapter.ts";
 import { NextcloudChannel } from "./channels/nextcloud.ts";
@@ -385,6 +386,7 @@ async function main(): Promise<void> {
 			},
 			fromAddress: ec.from_address,
 			fromName: ec.from_name,
+			allowedSenders: ec.allowed_senders,
 		});
 		router.register(emailChannel);
 		console.log("[phantom] Email channel registered");
@@ -415,14 +417,21 @@ async function main(): Promise<void> {
 			botId: channelsConfig.nextcloud.bot_id,
 			sessionWindowMinutes: channelsConfig.nextcloud.session_window_minutes,
 			ownerUserId: channelsConfig.nextcloud.owner_user_id,
-			// Phase 2: Enhanced interactions configuration
-			enableProgressiveUpdates: channelsConfig.nextcloud.enable_progressive_updates,
+			// Enhanced interactions configuration
 			enableFeedback: channelsConfig.nextcloud.enable_feedback,
-			progressiveUpdateThrottleMs: channelsConfig.nextcloud.progressive_update_throttle_ms,
+			// Talk 24+: join the thread a message belongs to
+			enableThreads: channelsConfig.nextcloud.enable_threads,
+			// Agent interrupt: stop-emoji reaction on the in-flight message
+			interruptReaction: channelsConfig.nextcloud.interrupt_reaction,
 			// Phase 6: Proactive intro configuration
 			sendIntro: channelsConfig.nextcloud.send_intro,
 		}, runtime.sessionStore);
 		router.register(nextcloudChannel);
+		// Agent interrupt: a stop-emoji reaction on the in-flight message
+		// aborts the running turn; the turn delivers "Stopped." itself
+		nextcloudChannel.onInterrupt = (target) => {
+			runtime.interrupt("nextcloud", target.conversationId);
+		};
 		console.log("[phantom] Nextcloud channel registered");
 	}
 
@@ -544,15 +553,23 @@ async function main(): Promise<void> {
 	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
 	// Phase 2: Pass Nextcloud configuration to interaction factory
 	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel, {
-		enableProgressiveUpdates: channelsConfig.nextcloud?.enable_progressive_updates,
 		enableFeedback: channelsConfig.nextcloud?.enable_feedback,
-		progressiveUpdateThrottleMs: channelsConfig.nextcloud?.progressive_update_throttle_ms,
 	}));
 	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));
 
 	const conversationMessages = new Map<string, { user: string[]; assistant: string[] }>();
 
 	router.onMessage(async (msg) => {
+		// Agent interrupt pre-gate: a stop trigger while a turn is running
+		// cancels that turn instead of starting a new one. The interrupted
+		// turn delivers the "Stopped." confirmation itself through its own
+		// delivery pipeline. Channel access control has already filtered the
+		// sender by the time a message reaches the router.
+		if (isInterruptText(msg.text) && runtime.interrupt(msg.channelId, msg.conversationId)) {
+			console.log(`[phantom] Interrupt accepted via ${msg.channelId} message: ${msg.conversationId}`);
+			return;
+		}
+
 		const sessionStartedAt = new Date().toISOString();
 		const convKey = `${msg.channelId}:${msg.conversationId}`;
 

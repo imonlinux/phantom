@@ -67,6 +67,13 @@ export type StatusReactionController = {
 	setTool: (toolName?: string) => void;
 	setDone: () => Promise<void>;
 	setError: () => Promise<void>;
+	/**
+	 * Terminal state that removes the current reaction instead of applying a
+	 * final emoji. Channels whose servers log every reaction change as a
+	 * chat system message (Nextcloud Talk) use this on success so a finished
+	 * turn leaves no emoji behind and no extra delete/add churn.
+	 */
+	clear: () => Promise<void>;
 	dispose: () => void;
 };
 
@@ -105,12 +112,27 @@ export function createStatusReactionController(params: {
 		if (stallSoftTimer) clearTimeout(stallSoftTimer);
 		if (stallHardTimer) clearTimeout(stallHardTimer);
 
+		// Stall callbacks apply the emoji directly instead of going through
+		// applyDebounced, which calls resetStallTimers() at the end. Routing
+		// stall applications through it re-arms the timers from the stall
+		// itself: because stallSoft != stallHard, the two timers re-arm each
+		// other and a turn that never finishes oscillates the two emojis
+		// forever, each flip a remove+add that Talk renders as system
+		// messages. With direct application the ladder runs once per
+		// activity gap: stallSoft, then stallHard, then silence until real
+		// activity re-arms it via applyDebounced.
 		stallSoftTimer = setTimeout(() => {
-			if (!finished) applyDebounced(emojis.stallSoft, true);
+			stallSoftTimer = null;
+			if (!finished && currentEmoji !== emojis.stallSoft) {
+				void enqueue(() => applyEmoji(emojis.stallSoft));
+			}
 		}, timing.stallSoftMs);
 
 		stallHardTimer = setTimeout(() => {
-			if (!finished) applyDebounced(emojis.stallHard, true);
+			stallHardTimer = null;
+			if (!finished && currentEmoji !== emojis.stallHard) {
+				void enqueue(() => applyEmoji(emojis.stallHard));
+			}
 		}, timing.stallHardMs);
 	}
 
@@ -149,6 +171,22 @@ export function createStatusReactionController(params: {
 		return enqueue(() => applyEmoji(emoji));
 	}
 
+	function clearReaction(): Promise<void> {
+		if (finished) return Promise.resolve();
+		finished = true;
+		clearTimers();
+		const prev = currentEmoji;
+		currentEmoji = "";
+		if (!prev) return Promise.resolve();
+		return enqueue(async () => {
+			try {
+				await adapter.removeReaction(prev);
+			} catch (err) {
+				onError?.(err);
+			}
+		});
+	}
+
 	return {
 		setQueued: () => applyDebounced(emojis.queued, true),
 		setThinking: () => applyDebounced(emojis.thinking),
@@ -158,6 +196,7 @@ export function createStatusReactionController(params: {
 		},
 		setDone: () => finishWith(emojis.done),
 		setError: () => finishWith(emojis.error),
+		clear: () => clearReaction(),
 		dispose: () => {
 			finished = true;
 			clearTimers();

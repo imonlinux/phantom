@@ -14,6 +14,35 @@ import { extractBodyText, isAutoReply, textToHtml } from "./email-helpers.ts";
 import { ImapIdleSupervisor, type ImapReadClient } from "./email-idle-loop.ts";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 
+/**
+ * Compact a list of UIDs into an IMAP UID sequence-set string
+ * ("1:3,7,9:10"). ImapFlow's fetch in this version ignores a {uid:true}
+ * query option for arrays, so UID selection must go through the range
+ * string itself with the option passed as the third fetch argument.
+ */
+function toUidSet(uids: number[]): string {
+	const sorted = [...uids].sort((a, b) => a - b);
+	const parts: string[] = [];
+	let start = sorted[0];
+	let prev = sorted[0];
+	for (const uid of sorted.slice(1)) {
+		if (uid === prev + 1) {
+			prev = uid;
+			continue;
+		}
+		parts.push(start === prev ? `${start}` : `${start}:${prev}`);
+		start = prev = uid;
+	}
+	parts.push(start === prev ? `${start}` : `${start}:${prev}`);
+	return parts.join(",");
+}
+
+function isAllowedSender(address: string, allowed?: string[]): boolean {
+	if (!allowed || allowed.length === 0) return true;
+	const normalized = address.trim().toLowerCase();
+	return allowed.some((a) => a.trim().toLowerCase() === normalized);
+}
+
 export type EmailChannelConfig = {
 	imap: {
 		host: string;
@@ -29,6 +58,13 @@ export type EmailChannelConfig = {
 	};
 	fromAddress: string;
 	fromName: string;
+	/**
+	 * Inbound senders the agent may act on. Matched case-insensitively on the
+	 * full address. Empty/undefined allows everyone (previous behavior);
+	 * messages from other senders are left unread for pipeline scripts and
+	 * never trigger agent turns.
+	 */
+	allowedSenders?: string[];
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -61,6 +97,9 @@ export class EmailChannel implements Channel {
 	private idle: ImapIdleSupervisor | null = null;
 	private transporter: NodemailerTransport | null = null;
 	private threads = new Map<string, EmailThread>();
+	// Uids already logged as skipped, so each non-allowed message is logged
+	// once instead of on every IDLE rescan.
+	private skippedLogged = new Set<number>();
 
 	constructor(config: EmailChannelConfig) {
 		this.config = config;
@@ -177,12 +216,17 @@ export class EmailChannel implements Channel {
 		if (!this.messageHandler) return;
 
 		try {
-			const messages = client.fetch("1:*", {
-				uid: true,
-				flags: true,
-				envelope: true,
-				source: true,
-			});
+			// Server-side unseen search instead of fetching the whole mailbox:
+			// with 4,500+ messages a full 1:* source fetch took minutes and
+			// regularly outlived the server's 5-minute connection limit.
+			const uids = await client.search({ seen: false }, { uid: true });
+			if (!uids || uids.length === 0) return;
+
+			const messages = client.fetch(
+				toUidSet(uids),
+				{ uid: true, flags: true, envelope: true, source: true },
+				{ uid: true },
+			);
 
 			for await (const msg of messages) {
 				if (!msg.flags || msg.flags.has("\\Seen")) continue;
@@ -194,6 +238,17 @@ export class EmailChannel implements Channel {
 				const fromAddress = from?.address ?? "unknown";
 				const subject = envelope.subject ?? "(no subject)";
 				const messageIdHeader = envelope.messageId ?? "";
+
+				// Sender allowlist: non-allowed mail is left unread (pipeline
+				// scripts like the fail2ban forwarder rely on unread state) and
+				// never triggers an agent turn.
+				if (!isAllowedSender(fromAddress, this.config.allowedSenders)) {
+					if (!this.skippedLogged.has(msg.uid)) {
+						this.skippedLogged.add(msg.uid);
+						console.log(`[email] Skipping uid ${msg.uid} from ${fromAddress}: not in allowed_senders`);
+					}
+					continue;
+				}
 
 				const bodyText = extractBodyText(msg.source?.toString() ?? "");
 				if (!bodyText.trim()) continue;
@@ -227,8 +282,12 @@ export class EmailChannel implements Channel {
 
 				try {
 					await client.messageFlagsAdd(String(msg.uid), ["\\Seen"], { uid: true });
-				} catch {
-					// Non-critical
+				} catch (err: unknown) {
+					// Failure here leaves the message unread, so the next IDLE
+					// cycle will reprocess it. Never swallow silently: a stuck
+					// unread message used to loop unseen for days (Aug 2026).
+					const why = err instanceof Error ? err.message : String(err);
+					console.warn(`[email] Failed to mark uid ${msg.uid} as \\Seen: ${why} — it will be reprocessed next cycle`);
 				}
 
 				try {

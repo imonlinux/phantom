@@ -100,9 +100,8 @@ NEXTCLOUD_BOT_ID="BOT_ID_FROM_STEP_2"
 NEXTCLOUD_SESSION_WINDOW_MINUTES="30"
 NEXTCLOUD_OWNER_USER_ID="your_nextcloud_user_id"
 NEXTCLOUD_SEND_INTRO="false"
-NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES="true"
 NEXTCLOUD_ENABLE_FEEDBACK="true"
-NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS="1000"
+NEXTCLOUD_ENABLE_THREADS="true"
 ```
 
 **Security Best Practice:** Always use environment variables for sensitive values like `NEXTCLOUD_SHARED_SECRET`. Never hardcode secrets directly in `config/channels.yaml` as this file may be committed to version control. The `.env` file is already gitignored for your protection.
@@ -122,9 +121,8 @@ channels:
     session_window_minutes: 30
     owner_user_id: "${NEXTCLOUD_OWNER_USER_ID}"
     send_intro: "${NEXTCLOUD_SEND_INTRO}"
-    enable_progressive_updates: "${NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES}"
     enable_feedback: "${NEXTCLOUD_ENABLE_FEEDBACK}"
-    progressive_update_throttle_ms: "${NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS}"
+    enable_threads: "${NEXTCLOUD_ENABLE_THREADS}"
 ```
 
 **Configuration fields:**
@@ -137,9 +135,10 @@ channels:
 - `session_window_minutes` - Time window for session coalescing (env: `NEXTCLOUD_SESSION_WINDOW_MINUTES`, default: `30`)
 - `owner_user_id` - **NEW**: Only respond to this Nextcloud user ID (env: `NEXTCLOUD_OWNER_USER_ID`, optional)
 - `send_intro` - **NEW**: Send welcome message on first startup (env: `NEXTCLOUD_SEND_INTRO`, default: `false`)
-- `enable_progressive_updates` - **NEW**: Show "Working on it..." updates (env: `NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES`, default: `true`) - **NOT AVAILABLE**: Nextcloud API limitation prevents message editing without message ID tracking
 - `enable_feedback` - **NEW**: Collect feedback via reactions (env: `NEXTCLOUD_ENABLE_FEEDBACK`, default: `true`)
-- `progressive_update_throttle_ms` - **NEW**: Throttle progressive updates (env: `NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS`, default: `1000`) - **NOT AVAILABLE**: See above
+- `enable_threads` - **NEW** (Talk 24+): Scope sessions to the Talk thread a message belongs to and post responses back into that thread (env: `NEXTCLOUD_ENABLE_THREADS`, default: `true`). The bot joins existing threads; it never creates them.
+
+**Deprecated keys:** `enable_progressive_updates` and `progressive_update_throttle_ms` are accepted but ignored. Bot messages cannot be edited: the Bot API's POST response carries no message ID and no edit endpoint exists in any Talk release. Existing configs that set these keys still validate.
 
 ## Step 4: Restart Phantom
 
@@ -170,7 +169,7 @@ bun run src/index.ts
 3. **Verify reactions (if enabled):**
    - Send a long-running query
    - The bot should set a 🧠 (thinking) reaction while processing
-   - When complete, it should replace with ✅ (done) or ⚠️ (error)
+   - On success the reaction is removed entirely (Talk logs every reaction change as a system message, so no terminal ✅ is parked on your message); on error it becomes ⚠️
 
 
 ## Features
@@ -208,6 +207,18 @@ Progressive updates (showing "Working on it..." with real-time tool activity) ar
 - Slack: ✅ Progressive updates supported (message editing available)
 - Telegram: ✅ Progressive updates supported (message editing available)
 - Nextcloud: ❌ Progressive updates not supported (API limitation)
+
+### Threads (Talk 24+)
+
+When `enable_threads: true` (default), Phantom scopes sessions to the Talk thread a message belongs to and posts responses back into that thread.
+
+**How it works:**
+- Incoming messages inside a Talk thread carry a `threadId` in the webhook payload; the session conversation ID becomes `nextcloud:{room}:thread{N}`
+- Precedence: a real thread beats an explicit reply, which beats the 30-minute time-window lookup
+- Responses posted to a thread-scoped conversation pass `threadId` to the bot sendMessage call, so they land in the thread
+- The bot only joins existing threads; it never creates them (bot POST responses carry no message ID, so a bot-created thread could never be addressed again)
+
+Disable with `enable_threads: false` to keep everything at room level (legacy behavior).
 
 ### Feedback Collection
 
@@ -565,25 +576,7 @@ If the welcome message doesn't appear:
 
 **Not Applicable - Feature Not Available**
 
-Progressive updates are not supported for Nextcloud Talk due to API limitations. See the "Progressive Updates" section in Features above for details.
-
-If you see multiple "Working on it..." messages, this indicates progressive updates are incorrectly enabled. To disable:
-
-1. **Set enable_progressive_updates to false:**
-   ```bash
-   # In .env file
-   NEXTCLOUD_ENABLE_PROGRESSIVE_UPDATES="false"
-   ```
-
-2. **Restart Phantom:**
-   ```bash
-   docker compose restart phantom
-   ```
-
-3. **Verify behavior:**
-   - You should see status reactions on your message instead
-   - Single response when agent completes
-   - No multiple "Working on it..." messages
+Progressive updates are not supported for Nextcloud Talk due to API limitations: the Bot API's POST response carries no message ID and no edit endpoint exists in any Talk release. The `enable_progressive_updates` and `progressive_update_throttle_ms` config keys are accepted but ignored. Status reactions are the activity indicator instead.
 
 ### Multiple bots in the same room
 

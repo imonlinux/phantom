@@ -1085,13 +1085,37 @@ describe("NextcloudChannel", () => {
 			});
 		}
 
+		// Real Talk 24 webhook shapes (spreed BotService::afterReactionAdded /
+		// afterReactionRemoved): for Like the emoji is TOP-LEVEL `content` and
+		// `object` is the reacted-to chat Note whose `id` is the message ID.
+		// For Undo the Like activity is nested, so the emoji lives at
+		// object.content and the message id at object.object.id (object.actor
+		// is the message author, not the remover - a spreed quirk).
 		function reactionPayload(type: string, actorId: string, reaction: string) {
-			return {
-				type,
-				actor: { type: "Person", id: actorId, name: "Actor" },
-				object: { id: 123, type: "react", reaction },
-				target: { id: ROOM_TOKEN, name: "Test Room" },
+			const note = {
+				type: "Note",
+				id: 123,
+				name: "Original bot message",
+				content: '{"message":"Original bot message","actorType":"bots","actorId":"bot-x"}',
+				mediaType: "text/markdown",
 			};
+			const actor = { type: "Person", id: actorId, name: "Actor" };
+			const target = { type: "Collection", id: ROOM_TOKEN, name: "Test Room" };
+			if (type === "Undo") {
+				return {
+					type,
+					actor,
+					object: {
+						type: "Like",
+						actor: { type: "Person", id: "users/author", name: "Author" },
+						object: note,
+						target,
+						content: reaction,
+					},
+					target,
+				};
+			}
+			return { type, actor, object: note, target, content: reaction };
 		}
 
 		async function process(channel: NextcloudChannel, payload: ReturnType<typeof reactionPayload>) {

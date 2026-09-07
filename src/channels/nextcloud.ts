@@ -53,19 +53,21 @@ interface NonceEntry {
 
 interface NextcloudWebhookPayload {
 	type: string;
+	// For "Like" events the reaction emoji is the activity's top-level
+	// content (BotService::afterReactionAdded), not a field on the object
+	content?: string;
 	actor?: {
 		type: string;
 		id: string;
 		name: string;
 	};
 	object?: {
-		type?: string; // "Note" for chat messages, "react" for reaction events
+		type?: string; // "Note" for chat messages and reacted-to messages
 		id?: number | string;
 		content?: string;
 		name?: string;
 		parentMessageId?: number | string;
 		threadId?: number | string; // Talk 24+: present when the message lives inside a thread
-		reaction?: string; // For reaction events
 	};
 	target?: {
 		id: string;
@@ -934,8 +936,13 @@ export class NextcloudChannel implements Channel {
 
 	private handleReactionFeedback(payload: NextcloudWebhookPayload, roomToken: string): void {
 		const actorId = payload.actor?.id;
+		// Talk 24 Like payload shape (spreed BotService::afterReactionAdded):
+		// the emoji rides at TOP-LEVEL `content`, and `object` is the
+		// reacted-to chat message Note whose `id` is the Talk message ID.
+		// There is no `object.reaction` field; reading it meant every real
+		// Like failed the guard below.
+		const reaction = payload.content;
 		const messageId = payload.object?.id;
-		const reaction = payload.object?.reaction;
 
 		if (!actorId || !messageId || !reaction) {
 			console.log("[nextcloud] Reaction event missing required fields");

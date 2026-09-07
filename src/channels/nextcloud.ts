@@ -68,6 +68,15 @@ interface NextcloudWebhookPayload {
 		name?: string;
 		parentMessageId?: number | string;
 		threadId?: number | string; // Talk 24+: present when the message lives inside a thread
+		// Plain "Reply" payloads carry the parent only here (issue #2):
+		// BotService::afterChatMessageSent wraps the parent Note inside
+		// inReplyTo, and generateNote never emits a top-level parentMessageId
+		inReplyTo?: {
+			type?: string;
+			object?: {
+				id?: number | string;
+			};
+		};
 	};
 	target?: {
 		id: string;
@@ -608,6 +617,13 @@ export class NextcloudChannel implements Channel {
 				: NaN;
 		const threadId = !isNaN(threadIdNum) ? threadIdNum : undefined;
 
+		const replyParentIdNum = typeof object?.inReplyTo?.object?.id === "number"
+			? object.inReplyTo.object.id
+			: typeof object?.inReplyTo?.object?.id === "string"
+				? parseInt(object.inReplyTo.object.id, 10)
+				: NaN;
+		const replyParentId = !isNaN(replyParentIdNum) ? replyParentIdNum : undefined;
+
 		let threadRoot: number | string;
 		let activeThreadId: number | undefined;
 		if (threadId !== undefined && this.getEnableThreads()) {
@@ -617,6 +633,11 @@ export class NextcloudChannel implements Channel {
 		} else if (parentMessageId !== undefined) {
 			// Explicit reply — use the parent as the thread root
 			threadRoot = parentMessageId;
+		} else if (replyParentId !== undefined) {
+			// Plain "Reply" button: parent reference lives at
+			// object.inReplyTo.object.id (issue #2). Root the session on the
+			// parent so the conversation continues past the time window.
+			threadRoot = replyParentId;
 		} else {
 			// Top-level message — check for a recent active session in this room
 			const sessionWindowMs = (this.config.sessionWindowMinutes ?? 30) * 60 * 1000;

@@ -20,6 +20,7 @@ import { permissionOptionsFromConfig } from "./permission-options.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import { SessionStore } from "./session-store.ts";
 import { getThinkingConfig } from "./thinking-config.ts";
+import { INTERRUPT_ACK } from "../channels/interrupt.ts";
 
 export type RuntimeEvent =
 	| { type: "init"; sessionId: string }
@@ -33,6 +34,12 @@ export class AgentRuntime {
 	private sessionStore: SessionStore;
 	private costTracker: CostTracker;
 	private activeSessions = new Set<string>();
+	// Abort handles for running turns, keyed like activeSessions. interrupt()
+	// aborts through this registry; runQuery registers and clears its handle.
+	private aborts = new Map<string, AbortController>();
+	// Sessions whose abort was requested deliberately (vs the timeout, which
+	// also aborts but must keep the error surface)
+	private interruptRequested = new Set<string>();
 	private memoryContextBuilder: MemoryContextBuilder | null = null;
 	private evolvedConfig: EvolvedConfig | null = null;
 	private roleTemplate: RoleTemplate | null = null;
@@ -90,7 +97,7 @@ export class AgentRuntime {
 		if (this.activeSessions.has(sessionKey)) {
 			console.warn(`[runtime] Session busy, bouncing concurrent message: ${sessionKey}`);
 			return {
-				text: "Error: session busy (previous execution still running)",
+				text: "Error: still working on your previous request. Send 'stop' to cancel it.",
 				sessionId: "",
 				cost: emptyCost(),
 				durationMs: 0,
@@ -105,6 +112,26 @@ export class AgentRuntime {
 		} finally {
 			this.activeSessions.delete(sessionKey);
 		}
+	}
+
+	isBusy(channelId: string, conversationId: string): boolean {
+		return this.activeSessions.has(`${channelId}:${conversationId}`);
+	}
+
+	/**
+	 * Abort the running turn for a session, if any. Returns false when no
+	 * turn is active. The aborted turn classifies itself in runQuery and
+	 * ends as a plain "Stopped." response, so the confirmation reaches the
+	 * user through that turn's normal delivery pipeline.
+	 */
+	interrupt(channelId: string, conversationId: string): boolean {
+		const sessionKey = `${channelId}:${conversationId}`;
+		const controller = this.aborts.get(sessionKey);
+		if (!controller) return false;
+		this.interruptRequested.add(sessionKey);
+		controller.abort();
+		console.log(`[runtime] Interrupt requested for ${sessionKey}`);
+		return true;
 	}
 
 	private isExternalChannel(channelId: string): boolean {
@@ -190,6 +217,8 @@ export class AgentRuntime {
 		const controller = new AbortController();
 		const timeoutMs = (this.config.timeout_minutes ?? 240) * 60 * 1000;
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		this.aborts.set(sessionKey, controller);
+		let interrupted = false;
 		let sdkSessionId = "";
 		let resultText = "";
 		let cost: AgentCost = emptyCost();
@@ -267,6 +296,11 @@ export class AgentRuntime {
 			try {
 				await runSdkQuery(isResume);
 			} catch (err: unknown) {
+				if (this.interruptRequested.has(sessionKey)) {
+					// Deliberate stop, not a fault: classified below, and no
+					// error event so adapters keep their success end-state
+					interrupted = true;
+				} else {
 				const errorMsg = err instanceof Error ? err.message : String(err);
 				if (isResume && errorMsg.includes("No conversation found")) {
 					console.log(`[runtime] Stale session detected, retrying without resume: ${sessionKey}`);
@@ -286,9 +320,20 @@ export class AgentRuntime {
 					resultText = `Error: ${errorMsg}`;
 					onEvent?.({ type: "error", message: errorMsg });
 				}
+				}
 			}
+			if (this.interruptRequested.has(sessionKey)) interrupted = true;
 		} finally {
 			clearTimeout(timeout);
+			this.aborts.delete(sessionKey);
+			this.interruptRequested.delete(sessionKey);
+		}
+
+		if (interrupted) {
+			// Deliberate stop: the session id persisted at init, so the next
+			// message resumes the conversation; the killed turn's partial
+			// output is not worth surfacing
+			resultText = INTERRUPT_ACK;
 		}
 
 		this.lastTrackedFiles = fileTracker.getTrackedFiles();

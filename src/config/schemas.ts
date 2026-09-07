@@ -173,6 +173,9 @@ export const NextcloudChannelConfigSchema = z
 		// Phase 6: Proactive intro message
 		// Send welcome message on first startup
 		send_intro: z.boolean().default(false),
+		// Reaction that cancels the running turn when applied to the
+		// in-flight message (agent interrupt). Defaults to 🛑 when omitted.
+		interrupt_reaction: z.string().optional(),
 	})
 	.strict();
 

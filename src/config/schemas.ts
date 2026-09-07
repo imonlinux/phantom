@@ -160,18 +160,19 @@ export const NextcloudChannelConfigSchema = z
 		// Matches Nextcloud user ID (from webhook payload actor.id field)
 		// When omitted, bot responds to everyone (backward compatible)
 		owner_user_id: z.string().optional(),
-		// Phase 2: Enhanced interactions
-		// Enable progressive "Working on it..." updates during agent processing
-		// NOTE: Not supported for Nextcloud due to API limitations (postToNextcloud returns boolean, not message ID)
-		enable_progressive_updates: z.boolean().default(false),
+		// DEPRECATED, ignored: no bot message-edit endpoint exists in any Talk
+		// release (bot POST responses carry no message ID). Keys are kept so
+		// existing deployments' channels.yaml still pass .strict() validation.
+		enable_progressive_updates: z.boolean().optional(),
+		progressive_update_throttle_ms: z.number().int().min(500).max(10000).optional(),
 		// Enable feedback collection via reaction prompts (👍/👎)
 		enable_feedback: z.boolean().default(true),
-		// Throttle progressive updates to avoid rate limits (milliseconds)
-		// NOTE: Not supported for Nextcloud - see enable_progressive_updates above
-		progressive_update_throttle_ms: z.number().int().min(500).max(10000).default(1000),
-			// Phase 6: Proactive intro message
-			// Send welcome message on first startup
-			send_intro: z.boolean().default(false),
+		// Talk 24+: scope sessions to the thread a message belongs to and
+		// post responses back into that thread (default: true)
+		enable_threads: z.boolean().default(true),
+		// Phase 6: Proactive intro message
+		// Send welcome message on first startup
+		send_intro: z.boolean().default(false),
 	})
 	.strict();
 

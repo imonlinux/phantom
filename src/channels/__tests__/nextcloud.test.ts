@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { NextcloudChannel, type NextcloudChannelConfig } from "../nextcloud.ts";
+import { NextcloudChannel, NEXTCLOUD_BOT_FEATURES, type NextcloudChannelConfig } from "../nextcloud.ts";
+import { setFeedbackHandler, type FeedbackSignal } from "../feedback.ts";
+import type { InboundMessage } from "../types.ts";
 import type { SessionStore } from "../../agent/session-store.ts";
 
 // Test constants
@@ -87,7 +89,36 @@ describe("NextcloudChannel", () => {
 	let channel: NextcloudChannel;
 	let mockSessionStore: MockSessionStore;
 
+	// Outbound bot traffic (ask-features probe, postToNextcloud, reactions)
+	// targets https://TALK_SERVER. Stub it so tests never touch the network;
+	// localhost webhook traffic passes through to the real fetch.
+	let outboundCalls: Array<{ url: string; method: string; headers: Record<string, string>; body: string }> = [];
+	let stubbedFeatureStatus = 200;
+	let stubbedFeatures = 15;
+	let originalFetch: typeof fetch;
+
 	beforeEach(async () => {
+		outboundCalls = [];
+		stubbedFeatureStatus = 200;
+		stubbedFeatures = 15;
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (url.includes(TALK_SERVER)) {
+				outboundCalls.push({
+					url,
+					method: init?.method ?? "GET",
+					headers: (init?.headers ?? {}) as Record<string, string>,
+					body: String(init?.body ?? ""),
+				});
+				return new Response(JSON.stringify({ ocs: { data: { features: stubbedFeatures } } }), {
+					status: stubbedFeatureStatus,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return originalFetch(input, init);
+		}) as typeof fetch;
+
 		mockSessionStore = new MockSessionStore();
 		channel = new NextcloudChannel(testConfig, mockSessionStore);
 		await channel.connect();
@@ -95,6 +126,7 @@ describe("NextcloudChannel", () => {
 
 	afterEach(async () => {
 		await channel.disconnect();
+		globalThis.fetch = originalFetch;
 	});
 
 	describe("Channel properties", () => {
@@ -104,7 +136,9 @@ describe("NextcloudChannel", () => {
 		});
 
 		test("declares correct capabilities", () => {
-			expect(channel.capabilities.threads).toBe(false);
+			// Talk 24+ Bot API supports threads (threadId on sendMessage and in
+			// webhook payloads); the bot joins threads but never creates them.
+			expect(channel.capabilities.threads).toBe(true);
 			expect(channel.capabilities.richText).toBe(true);
 			expect(channel.capabilities.attachments).toBe(false);
 			expect(channel.capabilities.buttons).toBe(false);
@@ -929,7 +963,8 @@ describe("NextcloudChannel", () => {
 		});
 
 		test("correctly declares all capabilities", () => {
-			expect(channel.capabilities.threads).toBe(false);
+			// Talk 24+: threads are supported (join-only, no bot thread creation)
+			expect(channel.capabilities.threads).toBe(true);
 			expect(channel.capabilities.richText).toBe(true);
 			expect(channel.capabilities.attachments).toBe(false);
 			expect(channel.capabilities.buttons).toBe(false);
@@ -1024,6 +1059,250 @@ describe("NextcloudChannel", () => {
 			// Different user should trigger a new rejection
 			await rejectNonOwner("intruder2", ROOM_TOKEN);
 			expect(rejectionCount).toBe(2);
+		});
+	});
+
+	describe("Reaction feedback webhook routing (issue #1)", () => {
+		let feedbackSignals: FeedbackSignal[];
+
+		beforeEach(() => {
+			feedbackSignals = [];
+			setFeedbackHandler((signal) => {
+				feedbackSignals.push(signal);
+			});
+		});
+
+		afterEach(() => {
+			setFeedbackHandler(null as unknown as (signal: FeedbackSignal) => void);
+		});
+
+		function makeChannel(config: Partial<NextcloudChannelConfig> = {}): NextcloudChannel {
+			return new NextcloudChannel({
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				...config,
+			});
+		}
+
+		function reactionPayload(type: string, actorId: string, reaction: string) {
+			return {
+				type,
+				actor: { type: "Person", id: actorId, name: "Actor" },
+				object: { id: 123, type: "react", reaction },
+				target: { id: ROOM_TOKEN, name: "Test Room" },
+			};
+		}
+
+		async function process(channel: NextcloudChannel, payload: ReturnType<typeof reactionPayload>) {
+			return (channel as unknown as {
+				processWebhookPayload: (p: unknown) => Promise<{ status?: number; error?: string }>;
+			}).processWebhookPayload(payload);
+		}
+
+		test("routes a human Like reaction to the feedback handler", async () => {
+			const channel = makeChannel();
+			const result = await process(channel, reactionPayload("Like", "users/james", "👍"));
+			expect(result.error).toBeUndefined();
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].type).toBe("positive");
+			expect(feedbackSignals[0].userId).toBe("users/james");
+			expect(feedbackSignals[0].source).toBe("reaction");
+		});
+
+		test("ignores reactions from bot actors (bots/ prefix)", async () => {
+			const channel = makeChannel();
+			// ✅ is in the feedback map, so without the bot filter this would register
+			await process(channel, reactionPayload("Like", "bots/bot-ac8d23d39b8f4da2cc1305f69a11e05d5a7d4129", "✅"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores reactions from bot actors (bot- prefix without bots/)", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "bot-abc123", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores emojis outside the feedback map", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "users/james", "👀"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("maps negative reactions to negative feedback", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "users/james", "👎"));
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].type).toBe("negative");
+		});
+
+		test("ignores reaction removals (Undo type)", async () => {
+			const channel = makeChannel();
+			const result = await process(channel, reactionPayload("Undo", "users/james", "👍"));
+			expect(result.error).toBeUndefined();
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("does not route the legacy React type (Talk never sends it)", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("React", "users/james", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+
+		test("ignores reactions from non-owner when ownerUserId is configured", async () => {
+			const channel = makeChannel({ ownerUserId: "users/james" });
+			await process(channel, reactionPayload("Like", "users/someoneelse", "👍"));
+			expect(feedbackSignals).toHaveLength(0);
+		});
+	});
+
+	describe("Thread-scoped sessions (Talk 24+)", () => {
+		function makeChannel(config: Partial<NextcloudChannelConfig> = {}): NextcloudChannel {
+			return new NextcloudChannel({
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+				...config,
+			});
+		}
+
+		async function process(channel: NextcloudChannel, payload: unknown) {
+			return (channel as unknown as {
+				processWebhookPayload: (p: unknown) => Promise<{ status?: number; error?: string }>;
+			}).processWebhookPayload(payload);
+		}
+
+		function threadPayload(threadId?: number | string, parentMessageId?: number | string) {
+			return {
+				type: "Create",
+				actor: { type: "Person", id: "users/james", name: "James" },
+				object: { id: 900, type: "Note", content: "hello", threadId, parentMessageId },
+				target: { id: ROOM_TOKEN, name: "Test Room" },
+			};
+		}
+
+		async function captureInbound(ch: NextcloudChannel): Promise<InboundMessage[]> {
+			const seen: InboundMessage[] = [];
+			ch.onMessage(async (msg) => {
+				seen.push(msg);
+			});
+			return seen;
+		}
+
+		test("scopes the session to thread{N} when the payload carries threadId", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			const result = await process(ch, threadPayload(77));
+			expect(result.error).toBeUndefined();
+			expect(seen).toHaveLength(1);
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:thread77`);
+			expect(seen[0].metadata?.nextcloudThreadId).toBe(77);
+		});
+
+		test("threadId takes precedence over parentMessageId", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload("77", 55));
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:thread77`);
+		});
+
+		test("falls back to parentMessageId when no threadId is present", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(undefined, "55"));
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:55`);
+			expect(seen[0].metadata?.nextcloudThreadId).toBeUndefined();
+		});
+
+		test("enableThreads: false keeps legacy behavior and drops the thread from metadata", async () => {
+			const ch = makeChannel({ enableThreads: false });
+			const seen = await captureInbound(ch);
+
+			await process(ch, threadPayload(77));
+			// No session store wired: time-window lookup unavailable, root is "room"
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:room`);
+			// Metadata omits the thread too, so responses never land in it
+			expect(seen[0].metadata?.nextcloudThreadId).toBeUndefined();
+		});
+
+		test("send() maps a thread{N} root to the threadId param", async () => {
+			await channel.send(`nextcloud:${ROOM_TOKEN}:thread77`, { text: "threaded reply" });
+
+			const messageCalls = outboundCalls.filter((c) => c.url.endsWith(`/bot/${ROOM_TOKEN}/message`));
+			expect(messageCalls).toHaveLength(1);
+			const body = JSON.parse(messageCalls[0].body) as Record<string, unknown>;
+			expect(body.threadId).toBe(77);
+			expect(body.message).toBe("threaded reply");
+		});
+
+		test("send() omits threadId for room-level conversations", async () => {
+			await channel.send(`nextcloud:${ROOM_TOKEN}:room`, { text: "plain reply" });
+
+			const messageCalls = outboundCalls.filter((c) => c.url.endsWith(`/bot/${ROOM_TOKEN}/message`));
+			expect(messageCalls).toHaveLength(1);
+			const body = JSON.parse(messageCalls[0].body) as Record<string, unknown>;
+			expect("threadId" in body).toBe(false);
+		});
+	});
+
+	describe("Bot feature probe (ask-features, Talk 24+)", () => {
+		test("connect probes ask-features and caches the bitmask", async () => {
+			// connect() in beforeEach fired the probe fire-and-forget; let it settle
+			await new Promise((r) => setTimeout(r, 20));
+
+			expect(channel.getBotFeatures()).toBe(15);
+
+			const probe = outboundCalls.find((c) => c.url.endsWith("/bot/ask-features"));
+			expect(probe).toBeDefined();
+			expect(probe?.method).toBe("POST");
+			expect(JSON.parse(probe?.body ?? "{}")).toEqual({ token: ROOM_TOKEN });
+			// Signature covers random + room token (Fix #18 asymmetry), not the JSON body
+			const random = probe?.headers["X-Nextcloud-Talk-Bot-Random"] ?? "";
+			const sig = probe?.headers["X-Nextcloud-Talk-Bot-Signature"] ?? "";
+			expect(sig).toBe(signOutboundRequest(random, ROOM_TOKEN, SHARED_SECRET));
+		});
+
+		test("warns when feedback is enabled but the reaction feature is absent", async () => {
+			stubbedFeatures =
+				NEXTCLOUD_BOT_FEATURES.WEBHOOK | NEXTCLOUD_BOT_FEATURES.RESPONSE | NEXTCLOUD_BOT_FEATURES.EVENT;
+			const probeChannel = new NextcloudChannel(testConfig);
+			const warnings: string[] = [];
+			const originalWarn = console.warn;
+			console.warn = (...args: unknown[]) => {
+				warnings.push(args.join(" "));
+			};
+			try {
+				await probeChannel.queryBotFeatures();
+			} finally {
+				console.warn = originalWarn;
+			}
+			expect(probeChannel.getBotFeatures()).toBe(7);
+			expect(warnings.some((w) => w.includes("reaction feature"))).toBe(true);
+		});
+
+		test("no reaction warning when the server advertises reactions", async () => {
+			const probeChannel = new NextcloudChannel(testConfig);
+			const warnings: string[] = [];
+			const originalWarn = console.warn;
+			console.warn = (...args: unknown[]) => {
+				warnings.push(args.join(" "));
+			};
+			try {
+				await probeChannel.queryBotFeatures();
+			} finally {
+				console.warn = originalWarn;
+			}
+			expect(warnings.some((w) => w.includes("reaction feature"))).toBe(false);
+		});
+
+		test("probe failure is non-fatal and leaves the bitmask null", async () => {
+			stubbedFeatureStatus = 500;
+			const probeChannel = new NextcloudChannel(testConfig);
+			await expect(probeChannel.queryBotFeatures()).resolves.toBeNull();
+			expect(probeChannel.getBotFeatures()).toBeNull();
 		});
 	});
 });

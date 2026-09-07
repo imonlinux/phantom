@@ -136,6 +136,8 @@ export const EmailChannelConfigSchema = z.object({
 	}),
 	from_address: z.string().email(),
 	from_name: z.string().min(1).default("Phantom"),
+	// Inbound sender allowlist (case-insensitive). Empty/undefined allows all.
+	allowed_senders: z.array(z.string().min(3)).optional(),
 });
 
 export const WebhookChannelConfigSchema = z.object({

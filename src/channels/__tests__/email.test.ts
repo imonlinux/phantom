@@ -20,6 +20,9 @@ const mockIdle = mock(
 const mockFetch = mock(function* () {
 	// Empty generator - no unread messages
 });
+const mockSearch = mock((_query?: Record<string, unknown>, _opts?: Record<string, unknown>) =>
+	Promise.resolve([] as number[]),
+);
 const mockMessageFlagsAdd = mock(() => Promise.resolve());
 const mockSendMail = mock(() => Promise.resolve({ messageId: "<test@phantom.local>" }));
 
@@ -40,6 +43,7 @@ const MockImapFlow = mock((_opts: Record<string, unknown>) => {
 		logout: mockLogout,
 		getMailboxLock: mockGetMailboxLock,
 		idle: mockIdle,
+		search: mockSearch,
 		fetch: mockFetch,
 		messageFlagsAdd: mockMessageFlagsAdd,
 	};
@@ -83,6 +87,11 @@ describe("EmailChannel", () => {
 		mockLogout.mockClear();
 		mockSendMail.mockClear();
 		mockGetMailboxLock.mockClear();
+		mockSearch.mockClear();
+		mockFetch.mockClear();
+		mockMessageFlagsAdd.mockClear();
+		mockSearch.mockImplementation(() => Promise.resolve([] as number[]));
+		mockFetch.mockImplementation(function* () {});
 		capturedClients.length = 0;
 	});
 
@@ -241,6 +250,94 @@ describe("EmailChannel", () => {
 		expect(capturedClients.length).toBe(initialClientCount + 1);
 		expect(capturedClients[capturedClients.length - 1].errorHandlers.length).toBe(1);
 		expect(mockConnect.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+		await channel.disconnect();
+	});
+
+	test("processUnread searches unseen UIDs instead of fetching 1:*", async () => {
+		mockSearch.mockImplementation(() => Promise.resolve([301, 302]));
+		let fetched = 0;
+		mockFetch.mockImplementation(function* () {
+			fetched++;
+			yield {
+				uid: 301,
+				flags: new Set<string>(),
+				envelope: { from: [{ address: "james@test.com" }], subject: "s", messageId: "<1@t>", date: new Date() },
+				source: Buffer.from("hello"),
+			};
+		});
+
+		const channel = new EmailChannel(testConfig);
+		let handled = 0;
+		channel.onMessage(async () => {
+			handled++;
+		});
+		await channel.connect();
+
+		for (let i = 0; i < 100 && fetched === 0; i++) await new Promise((r) => setTimeout(r, 10));
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(mockSearch).toHaveBeenCalled();
+		// UID selection must ride in the range string, with {uid:true} as the
+		// third fetch argument (this imapflow version ignores it elsewhere).
+		const calls = mockFetch.mock.calls as unknown as Array<[string, Record<string, unknown>, Record<string, unknown>]>;
+		expect(calls[0][0]).toBe("301:302");
+		expect(calls[0][2]).toEqual({ uid: true });
+		expect(handled).toBe(1);
+
+		await channel.disconnect();
+	});
+
+	test("non-allowed senders are skipped without being marked seen", async () => {
+		mockSearch.mockImplementation(() => Promise.resolve([401]));
+		mockFetch.mockImplementation(function* () {
+			yield {
+				uid: 401,
+				flags: new Set<string>(),
+				envelope: { from: [{ address: "admin@test.com" }], subject: "[Fail2Ban] ban", messageId: "<2@t>", date: new Date() },
+				source: Buffer.from("banned 1.2.3.4"),
+			};
+		});
+
+		const channel = new EmailChannel({ ...testConfig, allowedSenders: ["james@test.com"] });
+		let handled = 0;
+		channel.onMessage(async () => {
+			handled++;
+		});
+		await channel.connect();
+
+		for (let i = 0; i < 100 && mockSearch.mock.calls.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(handled).toBe(0);
+		expect(mockMessageFlagsAdd).not.toHaveBeenCalled();
+
+		await channel.disconnect();
+	});
+
+	test("allowed senders are marked seen and handled", async () => {
+		mockSearch.mockImplementation(() => Promise.resolve([501]));
+		mockFetch.mockImplementation(function* () {
+			yield {
+				uid: 501,
+				flags: new Set<string>(),
+				envelope: { from: [{ address: "James@Test.com" }], subject: "hello", messageId: "<3@t>", date: new Date() },
+				source: Buffer.from("hi phantom"),
+			};
+		});
+
+		const channel = new EmailChannel({ ...testConfig, allowedSenders: ["james@test.com"] });
+		let handled = 0;
+		channel.onMessage(async () => {
+			handled++;
+		});
+		await channel.connect();
+
+		for (let i = 0; i < 100 && handled === 0; i++) await new Promise((r) => setTimeout(r, 10));
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(handled).toBe(1);
+		expect(mockMessageFlagsAdd).toHaveBeenCalledWith("501", ["\\Seen"], { uid: true });
 
 		await channel.disconnect();
 	});

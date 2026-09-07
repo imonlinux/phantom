@@ -6,10 +6,10 @@
  * the client with exponential backoff after a socket error.
  */
 
-// Re-issue IDLE well under the typical 30-minute server-side idle timeout
-// (RFC 2177 §3 recommends clients refresh before 29 minutes). 20 minutes
-// gives margin for slow networks and providers that enforce tighter limits.
-const IDLE_REFRESH_MS = 20 * 60 * 1000;
+// Re-issue IDLE well before the server drops an idle connection. Carbonio
+// terminates IDLE sessions after ~5 minutes regardless of RFC 2177's 29-minute
+// guidance, so refresh every 4 minutes to stay ahead of the server's timer.
+const IDLE_REFRESH_MS = 4 * 60 * 1000;
 
 // Backoff for reconnect attempts after an IDLE session ends in error.
 const RECONNECT_BASE_DELAY_MS = 1_000;
@@ -24,7 +24,15 @@ export type ImapFlowClient = {
 	logout: () => Promise<void>;
 	getMailboxLock: (mailbox: string) => Promise<{ release: () => void }>;
 	idle: (options: { abort: AbortSignal }) => Promise<void>;
-	fetch: (range: string, options: Record<string, unknown>) => AsyncIterable<ImapMessage>;
+	search: (
+		query: Record<string, unknown>,
+		options?: Record<string, unknown>,
+	) => Promise<number[]>;
+	fetch: (
+		range: string,
+		query: Record<string, unknown>,
+		fetchOptions?: Record<string, unknown>,
+	) => AsyncIterable<ImapMessage>;
 	messageFlagsAdd: (uid: string, flags: string[], options: Record<string, unknown>) => Promise<void>;
 };
 
@@ -43,7 +51,12 @@ export type ImapMessage = {
 
 /** Subset of ImapFlowClient needed by EmailChannel.processUnread. */
 export type ImapReadClient = {
-	fetch: (range: string, options: Record<string, unknown>) => AsyncIterable<ImapMessage>;
+	search: (query: Record<string, unknown>, options?: Record<string, unknown>) => Promise<number[]>;
+	fetch: (
+		range: string,
+		query: Record<string, unknown>,
+		fetchOptions?: Record<string, unknown>,
+	) => AsyncIterable<ImapMessage>;
 	messageFlagsAdd: (uid: string, flags: string[], options: Record<string, unknown>) => Promise<void>;
 };
 

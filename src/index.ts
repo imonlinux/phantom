@@ -385,6 +385,7 @@ async function main(): Promise<void> {
 			},
 			fromAddress: ec.from_address,
 			fromName: ec.from_name,
+			allowedSenders: ec.allowed_senders,
 		});
 		router.register(emailChannel);
 		console.log("[phantom] Email channel registered");

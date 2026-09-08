@@ -340,6 +340,7 @@ The intro is only sent once per channel - tracked in the database to avoid re-se
 - MarkdownV2 formatting with code block preservation
 - Message splitting for long messages (>4096 chars)
 - Commands: `/start`, `/status`, `/help`
+- Agent interrupt: react 😡 (configurable) on the in-flight message, or send `stop` / `cancel`, to cancel a running turn. See [Agent Interrupt](#agent-interrupt).
 
 **Status reactions (Telegram emoji substitutes):**
 - 👀 (eyes) - Queued
@@ -597,6 +598,52 @@ Local terminal interface for development. Auto-enabled when no Slack or Telegram
 bun run phantom start
 # Type messages directly in the terminal
 ```
+
+## Agent Interrupt
+
+A running turn can be cancelled mid-flight. The interrupted turn stops
+where it is (no more tokens spent) and replies with a single `Stopped.`
+message. The session stays intact: the next message continues with full
+conversation history and consolidated memory.
+
+Two trigger styles:
+
+**Text (all channels):** send any of these as a standalone message while a
+turn is running:
+
+- `stop`, `/stop`, `cancel` (case-insensitive)
+- 🛑 (with or without the variation selector)
+
+Anything longer (like "stop the deploy") is treated as a normal message.
+
+**Reaction (Nextcloud Talk and Telegram):** react with the stop emoji on the
+in-flight message. The anchor is your own message, the same one that carries
+the status reactions (👀 / 🤔 / 👌). Owner-only: reactions from other users
+never interrupt.
+
+| Channel | Default emoji | Config key | Notes |
+|---------|---------------|------------|-------|
+| Nextcloud Talk | 🛑 | `channels.nextcloud.interrupt_reaction` | Any emoji works |
+| Telegram | 😡 | `channels.telegram.interrupt_reaction` | Emoji must be in Telegram's reaction allowlist (🛑 is not, so Talk's default would never be applicable here). Requires `enable_message_reactions: true` and the bot promoted to admin in the group. Reaction events are not delivered in 1:1 DMs; use the text triggers there. |
+
+Custom emoji example:
+
+```yaml
+channels:
+  telegram:
+    enable_message_reactions: true
+    interrupt_reaction: "🫡"
+```
+
+Startup confirms the trigger:
+
+```
+[telegram] Interrupt reaction enabled: 😡 on the in-flight message cancels the running turn (same group/DM limits apply).
+```
+
+Interrupting is safe even mid-tool-call: each turn runs under its own
+abort controller, so stopping one channel's turn never affects a turn
+running on another channel.
 
 ## Channel Interface
 

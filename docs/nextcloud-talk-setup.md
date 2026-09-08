@@ -123,6 +123,7 @@ channels:
     send_intro: "${NEXTCLOUD_SEND_INTRO}"
     enable_feedback: "${NEXTCLOUD_ENABLE_FEEDBACK}"
     enable_threads: "${NEXTCLOUD_ENABLE_THREADS}"
+    interrupt_reaction: "🛑"
 ```
 
 **Configuration fields:**
@@ -137,6 +138,7 @@ channels:
 - `send_intro` - **NEW**: Send welcome message on first startup (env: `NEXTCLOUD_SEND_INTRO`, default: `false`)
 - `enable_feedback` - **NEW**: Collect feedback via reactions (env: `NEXTCLOUD_ENABLE_FEEDBACK`, default: `true`)
 - `enable_threads` - **NEW** (Talk 24+): Scope sessions to the Talk thread a message belongs to and post responses back into that thread (env: `NEXTCLOUD_ENABLE_THREADS`, default: `true`). The bot joins existing threads; it never creates them.
+- `interrupt_reaction` - **NEW**: Reaction that cancels the running turn when applied to the in-flight message (default: `🛑`). Owner-only; see [Agent Interrupt](#agent-interrupt-stop-reaction).
 
 **Deprecated keys:** `enable_progressive_updates` and `progressive_update_throttle_ms` are accepted but ignored. Bot messages cannot be edited: the Bot API's POST response carries no message ID and no edit endpoint exists in any Talk release. Existing configs that set these keys still validate.
 
@@ -236,6 +238,27 @@ When `enable_feedback: true` (default), Phantom appends "💡 Was this helpful? 
 This matches Slack's rich feedback reaction system for consistency across channels.
 
 Feedback signals are tracked in the evolution queue and used to refine the agent's configuration over time.
+
+### Agent Interrupt (Stop Reaction)
+
+A running turn can be cancelled mid-flight. React with 🛑 on your own
+message (the one showing the 👀 / 🤔 / ✅ status reactions) while Phantom is
+working. The turn stops immediately and replies with a single `Stopped.`
+message. The session stays intact: your next message continues with full
+history.
+
+Text works too: sending `stop`, `/stop`, or `cancel` as a standalone
+message does the same thing on any channel.
+
+The reaction trigger is owner-only (requires `owner_user_id` to be set; without it, anyone in the room could interrupt). The emoji is configurable:
+
+```yaml
+channels:
+  nextcloud:
+    interrupt_reaction: "⏹"
+```
+
+See [Channels: Agent Interrupt](channels.md#agent-interrupt) for the cross-channel picture.
 
 ### Owner Access Control
 

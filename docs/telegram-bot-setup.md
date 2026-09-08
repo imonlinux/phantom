@@ -594,6 +594,38 @@ Phantom uses emoji reactions to show bot status:
 
 **Note:** Telegram has a limited emoji allowlist. Phantom uses substitutions that work within Telegram's constraints.
 
+### Agent Interrupt (Stop Reaction)
+
+A running turn can be cancelled mid-flight. Two ways:
+
+1. **Text:** send `stop`, `/stop`, or `cancel` as a standalone message (works everywhere, including DMs).
+2. **Reaction:** react with 😡 on your own message (the one showing the 👀 / 🤔 / 👌 status reactions) while Phantom is working.
+
+The interrupted turn stops immediately and replies with `Stopped.`. The session stays intact: your next message continues with full history.
+
+Reaction constraints (the same ones that apply to reaction feedback):
+
+- Requires `enable_message_reactions: true` and the bot promoted to administrator in the group
+- Reaction events are not delivered in 1:1 DMs, so use the text triggers there
+- The default emoji is 😡 because 🛑 (used on other channels) is not in Telegram's reaction allowlist and can never be applied by users
+
+The emoji is configurable and owner-only regardless of emoji:
+
+```yaml
+channels:
+  telegram:
+    enable_message_reactions: true
+    interrupt_reaction: "🫡"
+```
+
+Startup confirms the trigger:
+
+```
+[telegram] Interrupt reaction enabled: 😡 on the in-flight message cancels the running turn (same group/DM limits apply).
+```
+
+See [Channels: Agent Interrupt](channels.md#agent-interrupt) for the cross-channel picture.
+
 ### Custom Rejection Reply
 
 Customize the message sent to non-owners:

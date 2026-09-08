@@ -218,6 +218,7 @@ Because the agent that can only use pre-built tools hits a ceiling. Phantom buil
 | **Self-evolution** | The agent rewrites its own config after every session, validated by LLM judges. Day 30 knows things Day 1 didn't. |
 | **Persistent memory** | Three tiers of vector memory. Mention something on Monday, it uses it on Wednesday. No re-explaining. |
 | **Dynamic tools** | Creates and registers its own MCP tools at runtime. Tools survive restarts and work across sessions. |
+| **Stoppable turns** | Interrupt a running agent mid-flight from any channel: send `stop` or `cancel`, or react with the stop emoji. No tokens burnt on an answer you already know is wrong. |
 | **Encrypted secrets** | AES-256-GCM encrypted forms with magic-link auth. No plain-text credentials in config files. |
 | **Email identity** | Every Phantom has its own email address. Send reports to people outside your Slack workspace. |
 | **Web chat** | A full browser-based chat client at `/chat` with SSE streaming, file attachments, and Web Push notifications. No Slack required. |

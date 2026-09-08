@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { findInFlightMessage } from "../interrupt.ts";
 import {
 	createTelegramInteractionFactory,
 	TELEGRAM_EMOJIS,
@@ -286,5 +287,37 @@ describe("createTelegramInteractionFactory: typing (P1)", () => {
 		const factory = createTelegramInteractionFactory(channel);
 		const instance = factory(makeTelegramMessage());
 		expect(() => instance?.dispose?.()).not.toThrow();
+	});
+});
+
+describe("createTelegramInteractionFactory: interrupt anchor", () => {
+	test("registers the inbound message as an in-flight interrupt target", () => {
+		const { channel } = makeMockTelegramChannel();
+		const factory = createTelegramInteractionFactory(channel);
+		const msg = makeTelegramMessage();
+		const instance = factory(msg);
+		expect(instance).not.toBeNull();
+		expect(findInFlightMessage("telegram", 42)).toEqual({
+			channelId: "telegram",
+			conversationId: "telegram:123",
+		});
+		instance?.dispose?.();
+	});
+
+	test("dispose unregisters the interrupt anchor", () => {
+		const { channel } = makeMockTelegramChannel();
+		const factory = createTelegramInteractionFactory(channel);
+		const instance = factory(makeTelegramMessage());
+		instance?.dispose?.();
+		expect(findInFlightMessage("telegram", 42)).toBeUndefined();
+	});
+
+	test("no anchor registered when the message has no telegramMessageId", () => {
+		const { channel } = makeMockTelegramChannel();
+		const factory = createTelegramInteractionFactory(channel);
+		const instance = factory(makeTelegramMessage({ telegramMessageId: undefined }));
+		expect(instance).not.toBeNull();
+		expect(findInFlightMessage("telegram", 42)).toBeUndefined();
+		instance?.dispose?.();
 	});
 });

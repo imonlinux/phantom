@@ -11,6 +11,7 @@
  */
 
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
+import { registerInFlightMessage, unregisterInFlightMessage } from "./interrupt.ts";
 import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
 import {
 	createStatusReactionController,
@@ -54,6 +55,13 @@ export function createTelegramInteractionFactory(
 		let statusReactions: StatusReactionController | undefined;
 		if (messageId !== undefined) {
 			const mid = messageId;
+			// Agent interrupt anchor: the user's message is the reaction target
+			// (status reactions land here too, mirroring the Talk pattern where
+			// the stop reaction applies to the inbound message).
+			registerInFlightMessage("telegram", mid, {
+				channelId: "telegram",
+				conversationId: msg.conversationId,
+			});
 			statusReactions = createStatusReactionController({
 				adapter: {
 					addReaction: async (emoji) => {
@@ -140,6 +148,9 @@ export function createTelegramInteractionFactory(
 			},
 
 			dispose(): void {
+				if (messageId !== undefined) {
+					unregisterInFlightMessage("telegram", messageId);
+				}
 				statusReactions?.dispose();
 			},
 		};

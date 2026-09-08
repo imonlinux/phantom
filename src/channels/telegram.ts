@@ -12,6 +12,7 @@
 
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
+import { findInFlightMessage } from "./interrupt.ts";
 import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
 import { Database } from "bun:sqlite";
 
@@ -56,6 +57,8 @@ type TelegramApi = {
 };
 
 type TelegrafContext = {
+	// Raw Telegraf update envelope; reaction handlers narrow it locally.
+	update?: unknown;
 	message?: {
 		text?: string;
 		from?: { id: number; first_name?: string; username?: string };
@@ -115,6 +118,12 @@ export type TelegramChannelConfig = {
 	webhookUrl?: string;
 	webhookSecret?: string;
 	verifyWebhookSourceIP?: boolean;
+	/**
+	 * Agent interrupt: reaction that cancels the running turn when applied
+	 * to the in-flight message. Must be in Telegram's reaction-emoji
+	 * allowlist (so not 🛑 like Talk); defaults to 😡 when omitted.
+	 */
+	interruptReaction?: string;
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -173,6 +182,10 @@ export class TelegramChannel implements Channel {
 	private config: TelegramChannelConfig;
 	private db: Database | null = null; // P6: Database for intro tracking
 	private typingTimers = new Map<number, ReturnType<typeof setInterval>>();
+
+	// Assigned by the composition root (index.ts) to reach the runtime's
+	// interrupt entry point; the channel itself never imports the runtime
+	onInterrupt: ((target: { conversationId: string; messageId: number }) => void) | null = null;
 
 	// P2.1: Per-chat circuit breaker. When setMessageReaction returns 400
 	// REACTION_INVALID for a chat, that chat is added here and subsequent
@@ -1365,6 +1378,41 @@ export class TelegramChannel implements Channel {
 		});
 	}
 
+	/**
+	 * Agent interrupt: a stop-emoji reaction on an in-flight message cancels
+	 * the running turn (mirrors the Talk stop-reaction trigger). Best-effort
+	 * — silently returns if the update is missing required fields, comes
+	 * from a non-owner, or the message has no active turn. The new_reaction
+	 * check also filters reaction removals (they arrive as empty new_reaction).
+	 */
+	private handleInterruptReaction(ctx: TelegrafContext, stopEmoji: string): void {
+		const update = ctx.update as unknown as {
+			message_reaction?: {
+				chat?: { id: number };
+				message_id?: number;
+				user?: { id: number };
+				new_reaction?: Array<{ type?: string; emoji?: string }>;
+			};
+		};
+		const mr = update.message_reaction;
+		if (!mr?.chat?.id || mr.message_id === undefined || !mr.user?.id) return;
+
+		if (!this.isOwner(String(mr.user.id))) return;
+
+		const applied = (mr.new_reaction ?? []).some(
+			(r) => typeof r.emoji === "string" && r.emoji.replaceAll("\uFE0F", "") === stopEmoji,
+		);
+		if (!applied) return;
+
+		const target = findInFlightMessage(this.id, mr.message_id);
+		if (!target) return;
+
+		console.log(
+			`[telegram] Interrupt requested via ${stopEmoji} reaction from ${mr.user.id} on message ${mr.message_id}`,
+		);
+		this.onInterrupt?.({ conversationId: target.conversationId, messageId: mr.message_id });
+	}
+
 	private registerHandlers(): void {
 		if (!this.bot) return;
 
@@ -1620,9 +1668,20 @@ export class TelegramChannel implements Channel {
 				this.handleReactionFeedback(ctx, "negative");
 			});
 
+			// Agent interrupt: stop-emoji reaction on the in-flight message
+			// cancels the running turn. The default avoids 🛑 because Telegram
+			// only delivers reactions from its own emoji allowlist.
+			const stopEmoji = (this.config.interruptReaction ?? "😡").replaceAll("\uFE0F", "");
+			this.bot.reaction([stopEmoji], async (ctx) => {
+				this.handleInterruptReaction(ctx, stopEmoji);
+			});
+
 			console.log(
 				"[telegram] Reaction-as-feedback enabled; bot must be admin in " +
 					"groups to receive reaction events. Has no effect in 1:1 DMs.",
+			);
+			console.log(
+				`[telegram] Interrupt reaction enabled: ${stopEmoji} on the in-flight message cancels the running turn (same group/DM limits apply).`,
 			);
 		}
 	}

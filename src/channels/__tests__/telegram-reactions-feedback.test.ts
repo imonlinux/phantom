@@ -95,8 +95,9 @@ describe("P2.4: reaction-as-feedback gating", () => {
 			botToken: "test",
 			enableMessageReactions: true,
 		});
-		expect(handlers.reactions.length).toBe(2);
-		expect(mockBot.reaction).toHaveBeenCalledTimes(2);
+		// positive, negative, and the agent-interrupt stop reaction
+		expect(handlers.reactions.length).toBe(3);
+		expect(mockBot.reaction).toHaveBeenCalledTimes(3);
 	});
 
 	test("positive handler registers for 👍, ❤, 🔥", () => {

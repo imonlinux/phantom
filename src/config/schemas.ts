@@ -116,6 +116,10 @@ export const TelegramChannelConfigSchema = z.object({
 	webhook_url: z.string().url().optional(),
 	webhook_secret: z.string().optional(),
 	verify_webhook_source_ip: z.boolean().default(false),
+	// Reaction that cancels the running turn when applied to the in-flight
+	// message (agent interrupt). Must be in Telegram's reaction-emoji
+	// allowlist (so not 🛑 like Talk). Defaults to 😡 when omitted.
+	interrupt_reaction: z.string().optional(),
 });
 
 export const EmailChannelConfigSchema = z.object({

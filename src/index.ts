@@ -353,10 +353,17 @@ async function main(): Promise<void> {
 				webhookUrl: channelsConfig.telegram.webhook_url,
 				webhookSecret: channelsConfig.telegram.webhook_secret,
 				verifyWebhookSourceIP: channelsConfig.telegram.verify_webhook_source_ip,
+				// Agent interrupt: stop-emoji reaction on the in-flight message
+				interruptReaction: channelsConfig.telegram.interrupt_reaction,
 			},
 			db, // P6: Pass database for intro tracking
 		);
 		router.register(telegramChannel);
+		// Agent interrupt: a stop-emoji reaction on the in-flight message
+		// aborts the running turn; the turn delivers "Stopped." itself
+		telegramChannel.onInterrupt = (target) => {
+			runtime.interrupt("telegram", target.conversationId);
+		};
 
 		// P8: Register webhook handler if webhook mode is enabled
 		if (channelsConfig.telegram.webhook_url) {

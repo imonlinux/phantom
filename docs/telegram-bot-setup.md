@@ -388,7 +388,7 @@ docker logs phantom --tail 100 | grep "setMessageReaction"
 
 **4. Verify emoji allowlist:**
 Telegram has a limited emoji allowlist for reactions. If you see `400 REACTION_INVALID`:
-- Check that you're using allowed emoji (🤔, 👌, 😱, 👀, 🥱, 🨄)
+- Check that you're using allowed emoji (🤔, 👌, 😱, 👀, 🥱, 😨)
 - See docs/channels.md for the complete allowlist
 
 ### Bot is rate limited
@@ -590,7 +590,7 @@ Phantom uses emoji reactions to show bot status:
 | 👌 | Done | Request completed successfully |
 | 😱 | Error | An error occurred |
 | 🥱 | Stall (soft) | Temporary slowdown, retrying |
-| 🨄 | Stall (hard) | Permanent failure, giving up |
+| 😨 | Stall (hard) | Permanent failure, giving up |
 
 **Note:** Telegram has a limited emoji allowlist. Phantom uses substitutions that work within Telegram's constraints.
 

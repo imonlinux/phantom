@@ -1,6 +1,8 @@
 # Phantom
 
-Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Web Chat/Telegram/Email/Webhook, and exposes all capabilities as an MCP server. 30,000+ lines of TypeScript, 1,819 tests, v0.20.2. Apache 2.0, repo at ghostwright/phantom.
+Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a VM. It wraps the Claude Agent SDK as a subprocess (Anthropic by default, swappable via a `provider:` config block to Z.AI/GLM-5.1, OpenRouter, Ollama, vLLM, LiteLLM, or any Anthropic Messages API compatible endpoint). It maintains vector-backed memory across sessions, rewrites its own configuration through a validated self-evolution engine, communicates via Slack/Web Chat/Telegram/Nextcloud Talk/Email/Webhook, and exposes all capabilities as an MCP server. 70,000+ lines of TypeScript, 2,263 tests. Apache 2.0.
+
+This repository (`imonlinux/phantom`) is a fork of `ghostwright/phantom`, whose public development is frozen. The fork is the living codebase: channel work (Talk 24 parity, agent interrupt), the email channel hardening, and all ongoing fixes land here.
 
 ## Tech Stack
 
@@ -10,7 +12,7 @@ Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a
 | Agent | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) subprocess. Provider is configurable via `src/config/providers.ts`: Anthropic (default), Z.AI, OpenRouter, Ollama, vLLM, LiteLLM, custom. |
 | Memory | Qdrant (vector DB, Docker) + Ollama (nomic-embed-text, local embeddings) |
 | State | SQLite via Bun (sessions, tasks, metrics, evolution versions, scheduled jobs) |
-| Channels | Slack (Socket Mode), Web Chat (SSE streaming), Telegram (long polling), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI |
+| Channels | Slack (Socket Mode), Web Chat (SSE streaming), Telegram (long polling + webhook), Nextcloud Talk (bot webhook), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI. Every channel supports agent interrupt: send stop/cancel or react with the stop emoji to cancel a running turn. |
 | Chat Client | React 19 + Vite + shadcn/ui + Tailwind v4 SPA at `/chat` |
 | Web UI | Tailwind v4 Browser CDN + DaisyUI v5, static files from public/ |
 | MCP | Streamable HTTP on /mcp, bearer token auth, 17+ tools |
@@ -42,13 +44,13 @@ If you find yourself writing a function that does something the agent can do bet
 
 ```bash
 bun install                          # Install dependencies
-bun test                             # Run 1,819 tests
+bun test                             # Run 2,263 tests. 13 failures are a known baseline (migrate/batch-processor/init/prompt-assembler suites); parity with baseline is the bar, plus 0 new failures.
 bun run src/index.ts                 # Start the server
 bun run src/cli/main.ts init --yes   # Initialize config (reads env vars)
 bun run src/cli/main.ts doctor       # Check all subsystems
 bun run src/cli/main.ts status       # Quick one-liner status
-bun run lint                         # Biome check
-bun run typecheck                    # tsc --noEmit
+bun run lint                         # Biome check (~167 pre-existing diagnostics; do not add new ones)
+bun run typecheck                    # tsc --noEmit (~114 pre-existing errors, mostly narrow Telegraf/Slack test typings; do not add new ones)
 
 # Chat UI (separate build)
 cd chat-ui && bun install            # Install chat-ui dependencies
@@ -85,10 +87,14 @@ src/
     notifications/      # Web Push (VAPID keys, subscriptions, triggers)
   channels/
     slack.ts            # Slack Socket Mode (primary channel, owner access control)
-    telegram.ts         # Telegram via Telegraf
-    email.ts            # IMAP/SMTP via ImapFlow + Nodemailer
+    telegram.ts         # Telegram via Telegraf (long polling + webhook mode)
+    nextcloud.ts        # Nextcloud Talk bot webhook (HMAC verified, Talk 24 threads)
+    email.ts            # IMAP/SMTP via ImapFlow + Nodemailer (Carbonio-tested)
     webhook.ts          # HTTP webhooks with HMAC-SHA256
-    router.ts           # Channel message multiplexer
+    router.ts           # Channel message multiplexer; owns the interrupt text pre-gate
+    interrupt.ts        # Agent interrupt: text triggers + in-flight message registry
+    interaction-adapter.ts          # Per-turn channel interaction lifecycle (factory/instance)
+    slack-interaction.ts / telegram-interaction.ts / nextcloud-interaction.ts  # Status reactions, progress streams, interrupt anchors
     feedback.ts         # Feedback buttons, evolution wiring
     status-reactions.ts # Emoji state machine for Slack reactions
     progress-stream.ts  # Progressive tool activity updates
@@ -134,7 +140,7 @@ src/
   core/
     server.ts           # Bun.serve() HTTP server, /health, /trigger, /webhook, /ui
   db/
-    schema.ts           # SQLite migrations (7 total)
+    schema.ts           # SQLite migrations (49 total). APPEND ONLY: never insert mid-list, or existing databases diverge.
     connection.ts       # Database connection
 config/                 # YAML configs (phantom.yaml, channels.yaml, mcp.yaml, roles/)
 phantom-config/         # Evolved agent config (constitution, persona, domain knowledge)
@@ -186,7 +192,7 @@ MCP flow: External client -> /mcp endpoint -> bearer auth -> MCP Server -> tool 
 
 **Docker (recommended for new installs):**
 ```bash
-git clone https://github.com/ghostwright/phantom.git && cd phantom
+git clone https://github.com/imonlinux/phantom.git && cd phantom
 cp .env.example .env   # add ANTHROPIC_API_KEY + Slack tokens
 docker compose up -d
 ```
@@ -204,7 +210,7 @@ Production deployments are managed internally. Do NOT modify production deployme
 
 ### Deploy gotchas (read before any Docker redeploy or fresh VM provision)
 
-For a **fresh VM from scratch with the latest local source**, follow `docs/deploy-new-phantom.md`. It captures every trap we have hit including stale SSH host keys, the `phantom-config/` build-context requirement on first deploy, pre-chowning ALL named volumes to uid 999 before the first `docker compose up`, the `claude login` flow over docker exec, the iTerm paste-into-TUI workaround, and the Slack token sharing trap.
+For a **fresh VM from scratch with the latest local source**, follow `docs/docker-deploy.md`. The traps we have hit and will hit again: stale SSH host keys, the `phantom-config/` build-context requirement on first deploy, pre-chowning ALL named volumes to uid 999 before the first `docker compose up`, the `claude login` flow over docker exec, and the Slack token sharing trap.
 
 For an **update to an existing Docker deployment**, three specific traps to never repeat:
 
@@ -275,7 +281,9 @@ Verify after every deploy with `docker exec phantom sh -c 'touch /app/public/_w 
 
 - [Getting Started](docs/getting-started.md) - Full setup guide with Slack app creation and remote VM deployment
 - [Architecture](docs/architecture.md) - System design and component overview
-- [Channels](docs/channels.md) - Slack, Telegram, Email, Webhook configuration
+- [Channels](docs/channels.md) - Slack, Telegram, Nextcloud Talk, Email, Webhook configuration, and the agent interrupt
+- [Telegram Bot Setup](docs/telegram-bot-setup.md) - BotFather walkthrough, transport modes, reaction/DM constraints
+- [Nextcloud Talk Setup](docs/nextcloud-talk-setup.md) - Bot install, Talk 24 threads, HMAC troubleshooting
 - [MCP](docs/mcp.md) - Connecting external clients to the MCP server
 - [Memory](docs/memory.md) - Three-tier vector memory architecture
 - [Self-Evolution](docs/self-evolution.md) - The 6-step reflection pipeline

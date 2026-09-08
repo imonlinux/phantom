@@ -349,7 +349,7 @@ The intro is only sent once per channel - tracked in the database to avoid re-se
 - 👌 (OK) - Done (substitute for ✅)
 - 😱 (scream) - Error (substitute for ⚠️)
 - 🥱 (yawning face) - Soft stall
-- 🏁 (chequered flag) - Hard stall
+- 😨 (fearful face) - Hard stall
 
 **Note:** Telegram has a limited emoji allowlist (~70 emoji). The substitutes above provide the best experience within Telegram's constraints.
 

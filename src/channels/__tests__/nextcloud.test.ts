@@ -139,9 +139,11 @@ describe("NextcloudChannel", () => {
 		test("declares correct capabilities", () => {
 			// Talk 24+ Bot API supports threads (threadId on sendMessage and in
 			// webhook payloads); the bot joins threads but never creates them.
+			// Outbound files ride the conversation-folder WebDAV share, not
+			// the Bot API, so attachments are declared true.
 			expect(channel.capabilities.threads).toBe(true);
 			expect(channel.capabilities.richText).toBe(true);
-			expect(channel.capabilities.attachments).toBe(false);
+			expect(channel.capabilities.attachments).toBe(true);
 			expect(channel.capabilities.buttons).toBe(false);
 			expect(channel.capabilities.reactions).toBe(true);
 		});
@@ -964,10 +966,11 @@ describe("NextcloudChannel", () => {
 		});
 
 		test("correctly declares all capabilities", () => {
-			// Talk 24+: threads are supported (join-only, no bot thread creation)
+			// Talk 24+: threads are supported (join-only, no bot thread creation);
+			// outbound attachments go via the conversation-folder WebDAV share
 			expect(channel.capabilities.threads).toBe(true);
 			expect(channel.capabilities.richText).toBe(true);
-			expect(channel.capabilities.attachments).toBe(false);
+			expect(channel.capabilities.attachments).toBe(true);
 			expect(channel.capabilities.buttons).toBe(false);
 			expect(channel.capabilities.reactions).toBe(true);
 		});

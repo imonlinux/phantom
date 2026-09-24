@@ -642,7 +642,7 @@ async function main(): Promise<void> {
 		let claimed = false;
 		for (const i of interactions) {
 			if (i.deliverResponse) {
-				const result = await i.deliverResponse({ text: response.text, isError });
+				const result = await i.deliverResponse({ text: response.text, isError, attachments: response.attachments });
 				if (result) claimed = true;
 			}
 		}
@@ -657,6 +657,7 @@ async function main(): Promise<void> {
 				text: response.text,
 				threadId: msg.threadId,
 				replyToId,
+				attachments: response.attachments,
 			});
 		}
 

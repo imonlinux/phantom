@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import { MAX_TALK_FILE_BYTES, TalkFileFetcher, extractTalkFileParams, rawNcUserId } from "../nextcloud-files.ts";
 import { NextcloudChannel, type NextcloudChannelConfig } from "../nextcloud.ts";
 import type { InboundMessage } from "../types.ts";
@@ -233,6 +234,77 @@ describe("TalkFileFetcher", () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(calls.length).toBe(0);
+	});
+});
+
+describe("TalkFileFetcher.uploadToConversation", () => {
+	const originalFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	function newFetcher(): TalkFileFetcher {
+		return new TalkFileFetcher({ talkServer: "nextcloud.example.com", userId: PHANTOM_ID, appPassword: "pw" });
+	}
+
+	function stubUploadDav(options?: { propfindSharer?: string[]; putStatus?: number; put404First?: boolean }) {
+		const calls: Array<{ method: string; url: string }> = [];
+		let putCount = 0;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			calls.push({ method, url });
+			if (method === "PROPFIND") {
+				if (url.endsWith("/Talk")) {
+					return davPropfindResponse([`James McMurphy-${ROOM}`, "Other-room-xyz"]);
+				}
+				return davPropfindResponse(options?.propfindSharer ?? ["Phantom-phantom", "James McMurphy-james"]);
+			}
+			if (method === "MKCOL") return new Response("", { status: 201 });
+			if (method === "PUT") {
+				putCount += 1;
+				if (options?.put404First && putCount === 1) return new Response("gone", { status: 404 });
+				return new Response("", { status: options?.putStatus ?? 201 });
+			}
+			return new Response("unexpected", { status: 500 });
+		}) as typeof fetch;
+		return calls;
+	}
+
+	test("uploads into the service account's sharer subfolder", async () => {
+		const calls = stubUploadDav();
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.path).toBe(`Talk/James McMurphy-${ROOM}/Phantom-phantom/report.pdf`);
+		const puts = calls.filter((c) => c.method === "PUT");
+		expect(puts.length).toBe(1);
+		expect(decodeURIComponent(puts[0].url)).toContain(`Talk/James McMurphy-${ROOM}/Phantom-phantom/report.pdf`);
+	});
+
+	test("creates the out folder via MKCOL when it does not exist yet", async () => {
+		const calls = stubUploadDav({ propfindSharer: ["James McMurphy-james"] });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		const mkcols = calls.filter((c) => c.method === "MKCOL");
+		expect(mkcols.length).toBe(1);
+		expect(decodeURIComponent(mkcols[0].url)).toContain("Phantom-phantom");
+	});
+
+	test("reports a failed PUT", async () => {
+		stubUploadDav({ putStatus: 500 });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("PUT 500");
+	});
+
+	test("re-walks folders once when the PUT 404s on a cached path", async () => {
+		const calls = stubUploadDav({ put404First: true });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		// 2 initial PROPFINDs + 2 retry PROPFINDs after cache invalidation
+		expect(calls.filter((c) => c.method === "PROPFIND").length).toBe(4);
+		expect(calls.filter((c) => c.method === "PUT").length).toBe(2);
 	});
 });
 

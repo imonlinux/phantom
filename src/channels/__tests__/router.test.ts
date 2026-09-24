@@ -17,9 +17,12 @@ class MockChannel implements Channel {
 	connected = false;
 	lastSent: OutboundMessage | null = null;
 
-	constructor(id: string) {
+	constructor(id: string, opts?: { attachments?: boolean }) {
 		this.id = id;
 		this.name = id;
+		if (opts?.attachments) {
+			this.capabilities = { ...this.capabilities, attachments: true };
+		}
 	}
 
 	async connect(): Promise<void> {
@@ -113,6 +116,30 @@ describe("ChannelRouter", () => {
 
 		await router.send("test", "conv-1", { text: "response" });
 		expect(ch.lastSent?.text).toBe("response");
+	});
+
+	test("degrades queued attachments to a note on channels without support", async () => {
+		const router = new ChannelRouter();
+		const ch = new MockChannel("cli");
+		router.register(ch);
+
+		await router.send("cli", "conv", {
+			text: "done",
+			attachments: [{ path: "/tmp/report.pdf", filename: "report.pdf", size: 10, mimeType: "application/pdf" }],
+		});
+		expect(ch.lastSent?.text).toContain("done");
+		expect(ch.lastSent?.text).toContain("report.pdf (available at /tmp/report.pdf)");
+	});
+
+	test("passes attachments through on channels with support", async () => {
+		const router = new ChannelRouter();
+		const ch = new MockChannel("tg", { attachments: true });
+		router.register(ch);
+		const attachments = [{ path: "/tmp/a.png", filename: "a.png", size: 5, mimeType: "image/png" }];
+
+		await router.send("tg", "conv", { text: "done", attachments });
+		expect(ch.lastSent?.text).toBe("done");
+		expect(ch.lastSent?.attachments).toEqual(attachments);
 	});
 
 	test("throws on send to unknown channel", async () => {

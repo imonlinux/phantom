@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { unlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { EmailChannel, type EmailChannelConfig } from "../email.ts";
 
 // Mock ImapFlow and Nodemailer
@@ -149,6 +152,42 @@ describe("EmailChannel", () => {
 		expect(callArgs.from).toContain("Phantom");
 	});
 
+	test("send maps queued attachments to nodemailer attachment entries", async () => {
+		const tmpPath = path.join(os.tmpdir(), `phantom-email-att-${Date.now()}.pdf`);
+		await Bun.write(tmpPath, "pdf-bytes");
+		try {
+			const channel = new EmailChannel(testConfig);
+			await channel.connect();
+
+			await channel.send("email:user@test.com:Subject", {
+				text: "See attached",
+				attachments: [
+					{ path: tmpPath, filename: "report.pdf", size: 9, mimeType: "application/pdf" },
+					{ path: "/tmp/phantom-missing-z9.bin", filename: "gone.bin", size: 1, mimeType: "application/octet-stream" },
+				],
+			});
+
+			const calls = mockSendMail.mock.calls as unknown as Array<Array<Record<string, unknown>>>;
+			const callArgs = calls[calls.length - 1][0];
+			// Only the readable file ships; the vanished one degrades to a note
+			expect(callArgs.attachments).toEqual([{ filename: "report.pdf", path: tmpPath }]);
+			expect(callArgs.text as string).toContain("Could not attach: gone.bin");
+		} finally {
+			await unlink(tmpPath).catch(() => {});
+		}
+	});
+
+	test("send without attachments omits the attachment field", async () => {
+		const channel = new EmailChannel(testConfig);
+		await channel.connect();
+
+		await channel.send("email:user@test.com:Subject", { text: "No files here" });
+
+		const calls = mockSendMail.mock.calls as unknown as Array<Array<Record<string, unknown>>>;
+		const callArgs = calls[calls.length - 1][0];
+		expect(callArgs.attachments).toBeUndefined();
+	});
+
 	test("send generates HTML body", async () => {
 		const channel = new EmailChannel(testConfig);
 		await channel.connect();
@@ -294,7 +333,12 @@ describe("EmailChannel", () => {
 			yield {
 				uid: 401,
 				flags: new Set<string>(),
-				envelope: { from: [{ address: "admin@test.com" }], subject: "[Fail2Ban] ban", messageId: "<2@t>", date: new Date() },
+				envelope: {
+					from: [{ address: "admin@test.com" }],
+					subject: "[Fail2Ban] ban",
+					messageId: "<2@t>",
+					date: new Date(),
+				},
 				source: Buffer.from("banned 1.2.3.4"),
 			};
 		});

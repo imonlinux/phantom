@@ -12,10 +12,18 @@
 import { Database } from "bun:sqlite";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { SessionStore } from "../agent/session-store.ts";
+import { attachmentFailureNote, attachmentsFallbackNote, readAttachmentBuffer } from "./attachments.ts";
 import { emitFeedback } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { TalkFileFetcher, type TalkFileParams, extractTalkFileParams } from "./nextcloud-files.ts";
-import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import type {
+	Channel,
+	ChannelCapabilities,
+	InboundMessage,
+	OutboundMessage,
+	PendingAttachment,
+	SentMessage,
+} from "./types.ts";
 
 export type NextcloudChannelConfig = {
 	sharedSecret: string;
@@ -102,7 +110,10 @@ export class NextcloudChannel implements Channel {
 		// never create them (see enableThreads).
 		threads: true,
 		richText: true,
-		attachments: false,
+		// Outbound files go through the conversation-folder share (WebDAV
+		// upload by the service account), not the Bot API, which cannot
+		// attach. Only effective when the service account is configured.
+		attachments: true,
 		buttons: false,
 		reactions: true, // Fix #21
 	};
@@ -310,7 +321,12 @@ export class NextcloudChannel implements Channel {
 		const threadMatch = /^thread(\d+)$/.exec(suffix);
 		const threadId = threadMatch ? Number.parseInt(threadMatch[1], 10) : undefined;
 
-		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId, threadId);
+		let text = message.text;
+		if (message.attachments && message.attachments.length > 0) {
+			text += await this.attachmentNote(roomToken, message.attachments);
+		}
+
+		const success = await this.postToNextcloud(roomToken, text, message.replyToId, threadId);
 		if (!success) {
 			throw new Error("Failed to post message to Nextcloud");
 		}
@@ -322,6 +338,46 @@ export class NextcloudChannel implements Channel {
 			conversationId,
 			timestamp: new Date(),
 		};
+	}
+
+	/**
+	 * Upload queued files into the conversation folder (the Bot API cannot
+	 * attach files) and build the note appended to the response text.
+	 * Uploads happen even when the text note is the only trace: room members
+	 * receive the files through the conversation-folder share.
+	 */
+	private async attachmentNote(roomToken: string, attachments: PendingAttachment[]): Promise<string> {
+		if (!this.fileFetcher) {
+			return attachmentsFallbackNote(attachments);
+		}
+		const delivered: string[] = [];
+		const failed: Array<{ name: string; error: string }> = [];
+		for (const attachment of attachments) {
+			const loaded = await readAttachmentBuffer(attachment);
+			if (!loaded.ok) {
+				failed.push({ name: attachment.filename, error: loaded.error });
+				continue;
+			}
+			const uploaded = await this.fileFetcher.uploadToConversation(roomToken, attachment.filename, loaded.buffer);
+			if (uploaded.ok) delivered.push(attachment.filename);
+			else failed.push({ name: attachment.filename, error: uploaded.error });
+		}
+		let note = "";
+		if (delivered.length > 0) {
+			note += `\n\n📎 Attached to the conversation folder: ${delivered.join(", ")}`;
+		}
+		if (failed.length > 0) {
+			note += `\n\n${attachmentFailureNote(failed)}`;
+		}
+		return note;
+	}
+
+	/**
+	 * Upload queued files for a turn delivered through the interaction
+	 * adapter (thread-scoped responses). Returns the note to append.
+	 */
+	async uploadTalkAttachments(roomToken: string, attachments: PendingAttachment[]): Promise<string> {
+		return this.attachmentNote(roomToken, attachments);
 	}
 
 	onMessage(handler: (message: InboundMessage) => Promise<void>): void {

@@ -1,13 +1,21 @@
 import type { Database } from "bun:sqlite";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { McpServerConfig, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	McpSdkServerConfigWithInstance,
+	McpServerConfig,
+	SDKMessage,
+	SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 
 type MessageParam = SDKUserMessage["message"];
+import { INTERRUPT_ACK } from "../channels/interrupt.ts";
+import type { PendingAttachment } from "../channels/types.ts";
 import { buildProviderEnv } from "../config/providers.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolvedConfig } from "../evolution/types.ts";
 import type { MemoryContextBuilder } from "../memory/context-builder.ts";
 import type { RoleTemplate } from "../roles/types.ts";
+import { createAttachmentToolServer } from "./attachment-tools.ts";
 import { executeChatQuery } from "./chat-query.ts";
 import { CostTracker } from "./cost-tracker.ts";
 import { type AgentCost, type AgentResponse, emptyCost } from "./events.ts";
@@ -20,7 +28,6 @@ import { permissionOptionsFromConfig } from "./permission-options.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import { SessionStore } from "./session-store.ts";
 import { getThinkingConfig } from "./thinking-config.ts";
-import { INTERRUPT_ACK } from "../channels/interrupt.ts";
 
 export type RuntimeEvent =
 	| { type: "init"; sessionId: string }
@@ -224,9 +231,21 @@ export class AgentRuntime {
 		let cost: AgentCost = emptyCost();
 		let emittedThinking = false;
 		const providerEnv = buildProviderEnv(this.config);
+		// Per-turn attachment queue for the phantom_send_file tool. Fresh
+		// array per query attempt; the tool server closes over it and the
+		// result carries it to the channel layer.
+		const attachmentCollector: PendingAttachment[] = [];
 
 		const runSdkQuery = async (useResume: boolean): Promise<void> => {
 			const permissionOptions = permissionOptionsFromConfig(this.config);
+			const mcpServers: Record<string, McpServerConfig | McpSdkServerConfigWithInstance> = this.mcpServerFactories
+				? Object.fromEntries(
+						await Promise.all(Object.entries(this.mcpServerFactories).map(async ([k, f]) => [k, await f()] as const)),
+					)
+				: {};
+			// Fresh server instance per query() call (factory pattern); the
+			// collector is the per-turn state it closes over.
+			mcpServers["phantom-attachments"] = createAttachmentToolServer(attachmentCollector);
 			const queryStream = query({
 				prompt: text,
 				options: {
@@ -242,15 +261,7 @@ export class AgentRuntime {
 					env: { ...process.env, ...providerEnv },
 					hooks: { PreToolUse: [commandBlocker], PostToolUse: [fileTracker.hook] },
 					...(useResume && session.sdk_session_id ? { resume: session.sdk_session_id } : {}),
-					...(this.mcpServerFactories
-						? {
-								mcpServers: Object.fromEntries(
-									await Promise.all(
-										Object.entries(this.mcpServerFactories).map(async ([k, f]) => [k, await f()] as const),
-									),
-								),
-							}
-						: {}),
+					mcpServers,
 				},
 			});
 
@@ -317,25 +328,25 @@ export class AgentRuntime {
 					// error event so adapters keep their success end-state
 					interrupted = true;
 				} else {
-				const errorMsg = err instanceof Error ? err.message : String(err);
-				if (isResume && errorMsg.includes("No conversation found")) {
-					console.log(`[runtime] Stale session detected, retrying without resume: ${sessionKey}`);
-					this.sessionStore.clearSdkSessionId(sessionKey);
-					sdkSessionId = "";
-					resultText = "";
-					cost = emptyCost();
-					emittedThinking = false;
-					try {
-						await runSdkQuery(false);
-					} catch (retryErr: unknown) {
-						const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-						resultText = `Error: ${retryMsg}`;
-						onEvent?.({ type: "error", message: retryMsg });
+					const errorMsg = err instanceof Error ? err.message : String(err);
+					if (isResume && errorMsg.includes("No conversation found")) {
+						console.log(`[runtime] Stale session detected, retrying without resume: ${sessionKey}`);
+						this.sessionStore.clearSdkSessionId(sessionKey);
+						sdkSessionId = "";
+						resultText = "";
+						cost = emptyCost();
+						emittedThinking = false;
+						try {
+							await runSdkQuery(false);
+						} catch (retryErr: unknown) {
+							const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+							resultText = `Error: ${retryMsg}`;
+							onEvent?.({ type: "error", message: retryMsg });
+						}
+					} else {
+						resultText = `Error: ${errorMsg}`;
+						onEvent?.({ type: "error", message: errorMsg });
 					}
-				} else {
-					resultText = `Error: ${errorMsg}`;
-					onEvent?.({ type: "error", message: errorMsg });
-				}
 				}
 			}
 			if (this.interruptRequested.has(sessionKey)) interrupted = true;
@@ -355,6 +366,15 @@ export class AgentRuntime {
 		this.lastTrackedFiles = fileTracker.getTrackedFiles();
 		this.costTracker.record(sessionKey, cost, this.config.model);
 		this.sessionStore.touch(sessionKey);
-		return { text: resultText, sessionId: sdkSessionId, cost, durationMs: Date.now() - startTime };
+		// An interrupted turn delivers only the stop confirmation; queued
+		// attachments from the killed turn are dropped with it.
+		const attachments = interrupted ? undefined : attachmentCollector;
+		return {
+			text: resultText,
+			sessionId: sdkSessionId,
+			cost,
+			durationMs: Date.now() - startTime,
+			...(attachments && attachments.length > 0 ? { attachments } : {}),
+		};
 	}
 }

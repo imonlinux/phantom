@@ -11,6 +11,7 @@
  */
 
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
+import { attachmentFailureNote } from "./attachments.ts";
 import { registerInFlightMessage, unregisterInFlightMessage } from "./interrupt.ts";
 import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
 import {
@@ -138,10 +139,16 @@ export function createTelegramInteractionFactory(
 				tc.stopTyping(cid);
 			},
 
-			async deliverResponse({ text }): Promise<boolean> {
+			async deliverResponse({ text, attachments }): Promise<boolean> {
 				const progressMessageId = progressStream.getMessageId();
 				if (progressMessageId) {
 					await progressStream.finish(text);
+					if (attachments && attachments.length > 0 && tc) {
+						const failed = await tc.sendAttachments(cid, attachments);
+						if (failed.length > 0) {
+							await tc.postPlainText(cid, attachmentFailureNote(failed));
+						}
+					}
 					return true;
 				}
 				return false;

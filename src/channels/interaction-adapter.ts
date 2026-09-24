@@ -18,7 +18,7 @@
  * must never throw into the orchestration loop.
  */
 
-import type { InboundMessage } from "./types.ts";
+import type { InboundMessage, PendingAttachment } from "./types.ts";
 import type { StatusReactionController } from "./status-reactions.ts";
 import type { ProgressStream } from "./progress-stream.ts";
 import type { RuntimeEvent } from "../agent/runtime.ts";
@@ -69,8 +69,14 @@ export type ChannelInteractionInstance = {
 	 *
 	 * Slack uses this to attach feedback buttons via progressStream.finish.
 	 * Most channels don't implement this and let the router deliver.
+	 * `attachments` carries files queued via phantom_send_file during the
+	 * turn; claiming implementations must deliver them or degrade to a note.
 	 */
-	deliverResponse?: (result: { text: string; isError: boolean }) => Promise<boolean> | boolean;
+	deliverResponse?: (result: {
+		text: string;
+		isError: boolean;
+		attachments?: PendingAttachment[];
+	}) => Promise<boolean> | boolean;
 
 	/** Cleanup hook, always called from the orchestration's cleanup block. */
 	dispose?: () => void;

@@ -10,9 +10,17 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { attachmentFailureNote, readAttachmentBuffer } from "./attachments.ts";
 import { extractBodyText, isAutoReply, textToHtml } from "./email-helpers.ts";
 import { ImapIdleSupervisor, type ImapReadClient } from "./email-idle-loop.ts";
-import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import type {
+	Channel,
+	ChannelCapabilities,
+	InboundMessage,
+	OutboundMessage,
+	PendingAttachment,
+	SentMessage,
+} from "./types.ts";
 
 /**
  * Compact a list of UIDs into an IMAP UID sequence-set string
@@ -166,7 +174,25 @@ export class EmailChannel implements Channel {
 		const thread = this.threads.get(conversationId);
 		const messageId = `<phantom-${randomUUID()}@${this.config.fromAddress.split("@")[1] ?? "phantom.local"}>`;
 
-		const htmlBody = textToHtml(message.text);
+		let text = message.text;
+		const mailAttachments: Array<{ filename: string; path: string }> = [];
+		if (message.attachments && message.attachments.length > 0) {
+			// Drop files that vanished between queueing and delivery so one
+			// missing path cannot fail the whole mail; note them instead.
+			const sendable: PendingAttachment[] = [];
+			const failed: Array<{ name: string; error: string }> = [];
+			for (const attachment of message.attachments) {
+				const loaded = await readAttachmentBuffer(attachment);
+				if (loaded.ok) sendable.push(attachment);
+				else failed.push({ name: attachment.filename, error: loaded.error });
+			}
+			for (const a of sendable) {
+				mailAttachments.push({ filename: a.filename, path: a.path });
+			}
+			if (failed.length > 0) text += `\n\n${attachmentFailureNote(failed)}`;
+		}
+
+		const htmlBody = textToHtml(text);
 		const subject = thread ? `Re: ${thread.subject}` : "Response from Phantom";
 
 		const mailOptions: Record<string, unknown> = {
@@ -174,9 +200,10 @@ export class EmailChannel implements Channel {
 			to: thread?.from ?? conversationId.replace("email:", ""),
 			subject,
 			html: htmlBody,
-			text: message.text,
+			text,
 			messageId,
 		};
+		if (mailAttachments.length > 0) mailOptions.attachments = mailAttachments;
 
 		// Threading headers
 		if (thread) {

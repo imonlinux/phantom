@@ -10,7 +10,8 @@
  *   typing-only signaling per the parity plan.
  */
 
-import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, PendingAttachment, SentMessage } from "./types.ts";
+import { attachmentFailureNote, readAttachmentBuffer } from "./attachments.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
@@ -55,6 +56,17 @@ type TelegramApi = {
 		isBig?: boolean,
 	) => Promise<unknown>;
 	getFile: (fileId: string) => Promise<{ file_path?: string }>;
+	// Outbound file transports (phase 3). Telegraf InputFile by buffer.
+	sendDocument: (
+		chatId: number | string,
+		document: { source: Buffer; filename?: string },
+		options?: Record<string, unknown>,
+	) => Promise<{ message_id: number }>;
+	sendPhoto: (
+		chatId: number | string,
+		photo: { source: Buffer; filename?: string },
+		options?: Record<string, unknown>,
+	) => Promise<{ message_id: number }>;
 };
 
 export type TelegrafContext = {
@@ -938,12 +950,55 @@ export class TelegramChannel implements Channel {
 			parse_mode: "MarkdownV2",
 		});
 
+		if (message.attachments && message.attachments.length > 0) {
+			const failed = await this.sendAttachments(chatId, message.attachments);
+			if (failed.length > 0) {
+				await this.postPlainText(chatId, attachmentFailureNote(failed));
+			}
+		}
+
 		return {
 			id: String(result.message_id),
 			channelId: this.id,
 			conversationId,
 			timestamp: new Date(),
 		};
+	}
+
+	/**
+	 * Send queued files as documents (or photos for images). Returns the
+	 * names of files that could not be delivered so callers can degrade.
+	 */
+	async sendAttachments(chatId: number | string, attachments: PendingAttachment[]): Promise<Array<{ name: string; error: string }>> {
+		if (!this.bot) throw new Error("Telegram bot not connected");
+		const failed: Array<{ name: string; error: string }> = [];
+
+		for (const attachment of attachments) {
+			const loaded = await readAttachmentBuffer(attachment);
+			if (!loaded.ok) {
+				failed.push({ name: attachment.filename, error: loaded.error });
+				continue;
+			}
+			const input = { source: loaded.buffer, filename: attachment.filename };
+			const options: Record<string, unknown> = {};
+			if (attachment.caption) options.caption = attachment.caption;
+			try {
+				if (attachment.mimeType.startsWith("image/")) {
+					await this.bot.telegram.sendPhoto(chatId, input, options);
+				} else {
+					await this.bot.telegram.sendDocument(chatId, input, options);
+				}
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				failed.push({ name: attachment.filename, error: msg });
+			}
+		}
+		return failed;
+	}
+
+	/** Plain text message without MarkdownV2 escaping, for system-style notes. */
+	async postPlainText(chatId: number | string, text: string): Promise<void> {
+		await this.bot?.telegram.sendMessage(chatId, text);
 	}
 
 	onMessage(handler: (message: InboundMessage) => Promise<void>): void {

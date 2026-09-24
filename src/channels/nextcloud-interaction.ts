@@ -137,13 +137,19 @@ export function createNextcloudInteractionFactory(
 				// Status reactions serve as the activity indicator
 			},
 
-			async deliverResponse({ text }): Promise<boolean> {
+			async deliverResponse({ text, attachments }): Promise<boolean> {
+				// Outbound files ride the conversation-folder share (Bot API
+				// cannot attach); the note names what landed where.
+				let fullText = text;
+				if (attachments && attachments.length > 0) {
+					fullText += await nc.uploadTalkAttachments(rt, attachments);
+				}
 				const enableFeedback = config?.enableFeedback !== false;
 				if (enableFeedback) {
 					const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
-					await deliverText(text + feedbackPrompt);
+					await deliverText(fullText + feedbackPrompt);
 				} else {
-					await deliverText(text);
+					await deliverText(fullText);
 				}
 				return true;
 			},

@@ -11,11 +11,12 @@
  * in `src/index.ts`.
  */
 
+import { attachmentsFallbackNote } from "./attachments.ts";
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
+import { type ProgressStream, createProgressStream, formatToolActivity } from "./progress-stream.ts";
 import type { SlackChannel } from "./slack.ts";
+import { type StatusReactionController, createStatusReactionController } from "./status-reactions.ts";
 import type { InboundMessage } from "./types.ts";
-import { createProgressStream, formatToolActivity, type ProgressStream } from "./progress-stream.ts";
-import { createStatusReactionController, type StatusReactionController } from "./status-reactions.ts";
 
 /**
  * Build a factory that produces Slack interaction adapters when the
@@ -110,11 +111,15 @@ export function createSlackInteractionFactory(slackChannel: SlackChannel | null)
 				}
 			},
 
-			async deliverResponse({ text }): Promise<boolean> {
+			async deliverResponse({ text, attachments }): Promise<boolean> {
+				// No Slack file transport yet: the note names the queued files.
+				// The return-false fallback leaves text untouched so the
+				// router's own degrade note is not appended twice.
+				const fullText = attachments && attachments.length > 0 ? text + attachmentsFallbackNote(attachments) : text;
 				if (progressStream) {
 					// Slack happy path: update the progress message with the final
 					// response + feedback buttons.
-					await progressStream.finish(text);
+					await progressStream.finish(fullText);
 					return true;
 				}
 				if (slackChannelId && slackThreadTs) {
@@ -122,7 +127,7 @@ export function createSlackInteractionFactory(slackChannel: SlackChannel | null)
 					// with the final response + feedback buttons in one shot.
 					const thinkingTs = await sc.postThinking(slackChannelId, slackThreadTs);
 					if (thinkingTs) {
-						await sc.updateWithFeedback(slackChannelId, thinkingTs, text);
+						await sc.updateWithFeedback(slackChannelId, thinkingTs, fullText);
 						return true;
 					}
 				}

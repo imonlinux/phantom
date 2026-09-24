@@ -29,7 +29,9 @@ export class SlackChannel implements Channel {
 	readonly capabilities: ChannelCapabilities = {
 		threads: true,
 		richText: true,
-		attachments: true,
+		// No file upload transport yet (files.uploadV2 deferred): queued
+		// attachments degrade to a fallback note instead of a real upload.
+		attachments: false,
 		buttons: true,
 		reactions: true,
 		progressUpdates: true,

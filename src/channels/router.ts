@@ -1,3 +1,4 @@
+import { attachmentsFallbackNote } from "./attachments.ts";
 import type { Channel, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 
 type MessageHandler = (message: InboundMessage) => Promise<void>;
@@ -45,7 +46,14 @@ export class ChannelRouter {
 		if (!channel) {
 			throw new Error(`Unknown channel: ${channelId}`);
 		}
-		return channel.send(conversationId, message);
+		// A channel without attachment transport never silently drops a
+		// queued file: the note names it and where it sits on disk so the
+		// user can still reach it.
+		const outbound: OutboundMessage =
+			message.attachments && message.attachments.length > 0 && !channel.capabilities.attachments
+				? { ...message, text: message.text + attachmentsFallbackNote(message.attachments) }
+				: message;
+		return channel.send(conversationId, outbound);
 	}
 
 	getChannelIds(): string[] {

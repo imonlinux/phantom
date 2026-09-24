@@ -65,6 +65,8 @@ export class TalkFileFetcher {
 	// walk so each file costs one GET in the common case.
 	private convFolderCache = new Map<string, string>();
 	private sharerFolderCache = new Map<string, string>();
+	// Outbound: the service account's own sharer subfolder per room
+	private outFolderCache = new Map<string, string>();
 
 	constructor(creds: TalkFetcherCredentials) {
 		const talkServer = creds.talkServer
@@ -223,5 +225,114 @@ export class TalkFileFetcher {
 			return { ok: false, error: `no sharer folder for ${rawId} in conversation folder` };
 		}
 		return { ok: true, folder };
+	}
+
+	/**
+	 * Upload a file into the conversation so room members receive it through
+	 * the conversation-folder share (the Bot API cannot attach files). The
+	 * service account writes into its own sharer subfolder; Talk exposes the
+	 * whole conversation folder to every participant via the TYPE_ROOM share.
+	 */
+	async uploadToConversation(
+		roomToken: string,
+		fileName: string,
+		data: Buffer,
+	): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+		const conv = await this.resolveConvFolderCached(roomToken);
+		if (!conv.ok) return conv;
+
+		const out = await this.resolveOutFolder(roomToken, conv.folder);
+		if (!out.ok) return out;
+
+		const url = `${this.davBase()}/${encodeSegments(`Talk/${conv.folder}/${out.folder}/${fileName}`)}`;
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				method: "PUT",
+				headers: { Authorization: this.authHeader() },
+				body: new Uint8Array(data),
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `PUT failed: ${msg}` };
+		}
+
+		// Folder renamed since caching: re-resolve once, then retry the PUT
+		if (res.status === 404) {
+			this.convFolderCache.delete(roomToken);
+			this.outFolderCache.delete(roomToken);
+			const convRetry = await this.resolveConvFolderCached(roomToken);
+			if (!convRetry.ok) return convRetry;
+			const outRetry = await this.resolveOutFolder(roomToken, convRetry.folder);
+			if (!outRetry.ok) return outRetry;
+			const retryUrl = `${this.davBase()}/${encodeSegments(`Talk/${convRetry.folder}/${outRetry.folder}/${fileName}`)}`;
+			try {
+				res = await fetch(retryUrl, {
+					method: "PUT",
+					headers: { Authorization: this.authHeader() },
+					body: new Uint8Array(data),
+				});
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return { ok: false, error: `PUT failed: ${msg}` };
+			}
+		}
+
+		if (!res.ok) {
+			return { ok: false, error: `PUT ${res.status}` };
+		}
+		return { ok: true, path: `Talk/${conv.folder}/${out.folder}/${fileName}` };
+	}
+
+	private async resolveConvFolderCached(
+		roomToken: string,
+	): Promise<{ ok: true; folder: string } | { ok: false; error: string }> {
+		const cached = this.convFolderCache.get(roomToken);
+		if (cached) return { ok: true, folder: cached };
+		const resolved = await this.resolveConvFolder(roomToken);
+		if (resolved.ok) this.convFolderCache.set(roomToken, resolved.folder);
+		return resolved;
+	}
+
+	/**
+	 * Find the service account's own sharer subfolder in the conversation
+	 * folder (named "<display name>-<user id>", same convention as inbound),
+	 * creating it on first upload. WebDAV MKCOL is idempotent enough here:
+	 * 201 = created, 405 = already exists.
+	 */
+	private async resolveOutFolder(
+		roomToken: string,
+		convFolder: string,
+	): Promise<{ ok: true; folder: string } | { ok: false; error: string }> {
+		const cached = this.outFolderCache.get(roomToken);
+		if (cached) return { ok: true, folder: cached };
+
+		const listing = await this.propfindFolderNames(`${this.davBase()}/${encodeSegments(`Talk/${convFolder}`)}`);
+		if (listing.ok) {
+			const existing = listing.names.find(
+				(n) => n !== convFolder && n.endsWith(`-${this.creds.userId}`),
+			);
+			if (existing) {
+				this.outFolderCache.set(roomToken, existing);
+				return { ok: true, folder: existing };
+			}
+		}
+
+		const fallbackName = `Phantom-${this.creds.userId}`;
+		let res: Response;
+		try {
+			res = await fetch(`${this.davBase()}/${encodeSegments(`Talk/${convFolder}/${fallbackName}`)}`, {
+				method: "MKCOL",
+				headers: { Authorization: this.authHeader() },
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `MKCOL failed: ${msg}` };
+		}
+		if (res.status !== 201 && res.status !== 405) {
+			return { ok: false, error: `MKCOL ${res.status}` };
+		}
+		this.outFolderCache.set(roomToken, fallbackName);
+		return { ok: true, folder: fallbackName };
 	}
 }

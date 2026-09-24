@@ -5,6 +5,19 @@ export type Attachment = {
 	mimeType?: string;
 };
 
+/**
+ * A file queued during a turn via the phantom_send_file tool, awaiting
+ * delivery with the response. Validated at queue time; transports read
+ * the bytes at delivery time.
+ */
+export type PendingAttachment = {
+	path: string;
+	filename: string;
+	size: number;
+	mimeType: string;
+	caption?: string;
+};
+
 export type InboundMessage = {
 	id: string;
 	channelId: string;
@@ -22,6 +35,9 @@ export type OutboundMessage = {
 	text: string;
 	threadId?: string;
 	replyToId?: string;
+	// Files queued via phantom_send_file; transports read the bytes at
+	// send time, so the pending shape (size + mimeType required) is used.
+	attachments?: PendingAttachment[];
 };
 
 export type SentMessage = {

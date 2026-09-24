@@ -1,3 +1,5 @@
+import type { PendingAttachment } from "../channels/types.ts";
+
 export type AgentCost = {
 	totalUsd: number;
 	inputTokens: number;
@@ -34,6 +36,9 @@ export type AgentResponse = {
 	sessionId: string;
 	cost: AgentCost;
 	durationMs: number;
+	// Files queued via phantom_send_file during the turn, delivered by the
+	// channel layer with the response text
+	attachments?: PendingAttachment[];
 };
 
 export function emptyCost(): AgentCost {

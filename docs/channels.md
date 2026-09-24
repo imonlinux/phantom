@@ -645,6 +645,34 @@ Interrupting is safe even mid-tool-call: each turn runs under its own
 abort controller, so stopping one channel's turn never affects a turn
 running on another channel.
 
+## File Attachments
+
+The agent can attach files to its responses on any channel. During a
+turn it queues files with its built-in `phantom_send_file` tool
+(absolute path + optional caption, up to 50 MB per file); the queue
+rides the response, and each channel delivers it with its own
+transport. A file a channel cannot deliver is never silently dropped:
+the response text gains a note naming the file and its server-side
+path.
+
+| Channel | Delivery | Notes |
+|---------|----------|-------|
+| Telegram | photo message for images, document otherwise | per-file failure note on API errors |
+| Nextcloud Talk | WebDAV upload into the conversation folder + `📎` note in the response | requires the WebDAV service account; see [Nextcloud Talk Setup](nextcloud-talk-setup.md#file-sharing) |
+| Email | MIME attachments | unreadable files degrade to a note; the mail still sends |
+| Slack | none yet | note naming file + path (files.uploadV2 pending) |
+| CLI, Webhook | none | note naming file + path |
+
+Interrupted turns discard their attachment queue: only the `Stopped.`
+confirmation goes out.
+
+Receiving files is separate and channel-specific. Telegram photos and
+documents are saved to `/app/data/attachments` and routed to the agent
+as `[Photo attachment: ...]` / `[File attachment: ...]` messages,
+unconditionally. Nextcloud Talk file shares work the same way when the
+WebDAV service account is configured; see
+[Nextcloud Talk Setup](nextcloud-talk-setup.md#file-sharing).
+
 ## Channel Interface
 
 All channels implement the same interface:

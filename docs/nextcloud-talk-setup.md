@@ -83,7 +83,26 @@ sudo -u www-data php occ talk:bot:list
 - `state` - Should be `1` (enabled)
 - `features` - Should include `webhook`, `response`, and optionally `reaction`
 
-## Step 3: Configure Phantom
+## Step 3: Create the WebDAV Service Account (File Sharing)
+
+File sharing in both directions rides a WebDAV service account, because
+the Talk Bot API has no file endpoints. Text-only setups can skip this
+step; without it the channel works but files are skipped with a note.
+
+1. **Create a Nextcloud user for the bot** (for example `phantom`) in
+   Settings -> Users, or with `occ user:add`.
+2. **Create an app password for it:** log in as that user, then go to
+   Settings -> Security -> "Create new app password". Nextcloud app
+   passwords are alphanumeric with hyphens; enter them unquoted in `.env`.
+3. **Add the service account to the Talk room as a participant.** Phantom
+   reaches the conversation folder (`/Talk/<room name>-<room token>/`)
+   through the service account's own share mounts, which only exist for
+   room members.
+
+Both config keys are required together; see `phantom_id` and
+`phantom_app_pass` in Step 4.
+
+## Step 4: Configure Phantom
 
 Add the Nextcloud channel configuration to your Phantom config:
 
@@ -102,6 +121,10 @@ NEXTCLOUD_OWNER_USER_ID="your_nextcloud_user_id"
 NEXTCLOUD_SEND_INTRO="false"
 NEXTCLOUD_ENABLE_FEEDBACK="true"
 NEXTCLOUD_ENABLE_THREADS="true"
+
+# File sharing (optional, both keys required; see Step 3)
+NEXTCLOUD_PHANTOM_ID="phantom"
+NEXTCLOUD_PHANTOM_APP_PASS="service-account-app-password"
 ```
 
 **Security Best Practice:** Always use environment variables for sensitive values like `NEXTCLOUD_SHARED_SECRET`. Never hardcode secrets directly in `config/channels.yaml` as this file may be committed to version control. The `.env` file is already gitignored for your protection.
@@ -124,6 +147,8 @@ channels:
     enable_feedback: "${NEXTCLOUD_ENABLE_FEEDBACK}"
     enable_threads: "${NEXTCLOUD_ENABLE_THREADS}"
     interrupt_reaction: "🛑"
+    phantom_id: "${NEXTCLOUD_PHANTOM_ID}"
+    phantom_app_pass: "${NEXTCLOUD_PHANTOM_APP_PASS}"
 ```
 
 **Configuration fields:**
@@ -139,10 +164,12 @@ channels:
 - `enable_feedback` - **NEW**: Collect feedback via reactions (env: `NEXTCLOUD_ENABLE_FEEDBACK`, default: `true`)
 - `enable_threads` - **NEW** (Talk 24+): Scope sessions to the Talk thread a message belongs to and post responses back into that thread (env: `NEXTCLOUD_ENABLE_THREADS`, default: `true`). The bot joins existing threads; it never creates them.
 - `interrupt_reaction` - **NEW**: Reaction that cancels the running turn when applied to the in-flight message (default: `🛑`). Owner-only; see [Agent Interrupt](#agent-interrupt-stop-reaction).
+- `phantom_id` - WebDAV service account user id (env: `NEXTCLOUD_PHANTOM_ID`, optional). Must be a participant in the room; see Step 3.
+- `phantom_app_pass` - App password for the service account (env: `NEXTCLOUD_PHANTOM_APP_PASS`, optional). Required together with `phantom_id` for file sharing in both directions.
 
 **Deprecated keys:** `enable_progressive_updates` and `progressive_update_throttle_ms` are accepted but ignored. Bot messages cannot be edited: the Bot API's POST response carries no message ID and no edit endpoint exists in any Talk release. Existing configs that set these keys still validate.
 
-## Step 4: Restart Phantom
+## Step 5: Restart Phantom
 
 After adding the configuration, restart Phantom to apply the changes:
 
@@ -157,7 +184,7 @@ sudo systemctl restart phantom
 bun run src/index.ts
 ```
 
-## Step 5: Test the Integration
+## Step 6: Test the Integration
 
 1. **Verify webhook connectivity:**
    - Send a message in your Nextcloud Talk room
@@ -172,6 +199,11 @@ bun run src/index.ts
    - Send a long-running query
    - The bot should set a 🧠 (thinking) reaction while processing
    - On success the reaction is removed entirely (Talk logs every reaction change as a system message, so no terminal ✅ is parked on your message); on error it becomes ⚠️
+
+4. **Verify file sharing (if the service account from Step 3 is configured):**
+   - Attach a small file in the Talk room with the composer's paperclip
+   - Phantom logs the download and processes the message with a `[File attachment: <name>]` prefix
+   - Ask Phantom to send you a file; the response message gains a `📎 Attached to the conversation folder:` note and the file appears under `/Talk/<room name>-<room token>/Phantom-<phantom_id>/` in Nextcloud
 
 
 ## Features
@@ -221,6 +253,30 @@ When `enable_threads: true` (default), Phantom scopes sessions to the Talk threa
 - The bot only joins existing threads; it never creates them (bot POST responses carry no message ID, so a bot-created thread could never be addressed again)
 
 Disable with `enable_threads: false` to keep everything at room level (legacy behavior).
+
+### File Sharing
+
+Phantom can receive files you share in the room and attach files to its
+responses. Both directions ride the WebDAV service account from Step 3;
+the Talk Bot API has no file endpoints.
+
+**Receiving:** attach a file with the composer's paperclip. Talk sends the
+bot a `file_shared` system message, Phantom downloads the file over WebDAV
+(as the service account, which sees the file through its room-share
+mount), stores it in `/app/data/attachments/talk-<message id>-<name>`, and
+processes it like any message. Files up to 50 MB are supported. Failed
+downloads are announced in the room instead of dropped.
+
+**Sending:** the agent queues files during a turn with its
+`phantom_send_file` tool. Phantom uploads each file via WebDAV into the
+conversation folder (`/Talk/<room name>-<room token>/Phantom-<phantom_id>/`,
+created on first upload), so it appears in the room's file list and every
+participant's Nextcloud file manager. The response message appends a
+`📎 Attached to the conversation folder:` note naming the files. Failed
+uploads are named in the note with the reason.
+
+Either direction configured but broken (missing service account, auth
+failure) degrades to a note in the message text, never a silent drop.
 
 ### Feedback Collection
 
@@ -381,6 +437,36 @@ If you see the bot in a loop responding to itself:
    ```bash
    # Should see: "[nextcloud] Ignoring message from self (botId=3)"
    docker logs phantom --tail 100 | grep "Ignoring message from self"
+   ```
+
+### File sharing not working
+
+1. **Verify both service account keys are set:**
+   ```bash
+   grep NEXTCLOUD_PHANTOM_ID .env
+   grep NEXTCLOUD_PHANTOM_APP_PASS .env
+   # Both must be non-empty; they only take effect together
+   ```
+
+2. **Verify the service account is a room participant:**
+   - Phantom reaches the conversation folder through the service
+     account's own share mounts, which only exist for room members
+   - Add the `phantom` user to the room's participant list in Talk
+
+3. **Verify the app password works over WebDAV:**
+   ```bash
+   curl -u "phantom:APP_PASSWORD" -X PROPFIND \
+     "https://nextcloud.example.com/remote.php/dav/files/phantom/Talk" \
+     -H "Depth: 1" -o /dev/null -w "%{http_code}\n"
+   # 207 = working, 401 = wrong app password
+   ```
+
+4. **Check Phantom logs:**
+   ```bash
+   docker logs phantom --tail 100 | grep "\[nextcloud\]"
+   # 'File share "x" not downloaded: phantom_id/phantom_app_pass not configured' -> keys missing
+   # 'Failed to download file share "x": PROPFIND 401' -> app password mismatch
+   # 'no conversation folder for token ... (is the service account a room participant?)' -> service account not in the room
    ```
 
 ### HMAC verification failures

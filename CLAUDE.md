@@ -12,7 +12,7 @@ This repository (`imonlinux/phantom`) is a fork of `ghostwright/phantom`, whose 
 | Agent | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) subprocess. Provider is configurable via `src/config/providers.ts`: Anthropic (default), Z.AI, OpenRouter, Ollama, vLLM, LiteLLM, custom. |
 | Memory | Qdrant (vector DB, Docker) + Ollama (nomic-embed-text, local embeddings) |
 | State | SQLite via Bun (sessions, tasks, metrics, evolution versions, scheduled jobs) |
-| Channels | Slack (Socket Mode), Web Chat (SSE streaming), Telegram (long polling + webhook), Nextcloud Talk (bot webhook), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI. Every channel supports agent interrupt: send stop/cancel or react with the stop emoji to cancel a running turn. |
+| Channels | Slack (Socket Mode), Web Chat (SSE streaming), Telegram (long polling + webhook), Nextcloud Talk (bot webhook), Email (IMAP/SMTP), Webhook (HMAC-SHA256), CLI. Every channel supports agent interrupt: send stop/cancel or react with the stop emoji to cancel a running turn. File attachments: Telegram and Nextcloud Talk (WebDAV service account) in both directions, email inbound + MIME outbound; the `phantom_send_file` tool queues files for delivery with the current turn's response. |
 | Chat Client | React 19 + Vite + shadcn/ui + Tailwind v4 SPA at `/chat` |
 | Web UI | Tailwind v4 Browser CDN + DaisyUI v5, static files from public/ |
 | MCP | Streamable HTTP on /mcp, bearer token auth, 17+ tools |

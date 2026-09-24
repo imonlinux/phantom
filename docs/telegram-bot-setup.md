@@ -305,6 +305,24 @@ You can switch between long-polling and webhook modes by updating the configurat
 2. Restart Phantom
 3. Phantom will automatically call `deleteWebhook()` to unregister
 
+## File Attachments
+
+Telegram file support is unconditional: it runs whenever the channel is enabled, with no extra configuration key. (There is no `attachments` toggle in the Telegram channel config; adding one has no effect.)
+
+**Inbound (receiving files from users):**
+
+- Photos are received via the `photo` update. Phantom downloads the largest available variant and saves it to `/app/data/attachments/telegram-photo-<message id>.jpg`. Normal image sends arrive as photos; only Telegram's "Send as file" arrives as a document.
+- Documents are received via the `document` update. Phantom downloads the file via `getFile` and saves it to `/app/data/attachments/` under its original name.
+- Either way, the message is routed to the agent as `[Photo attachment: <name>]` or `[File attachment: <name>]` with the server-side path, so the agent can read the file from disk.
+- Telegram's Bot API caps bot downloads at 20 MB; larger sends fail at the download step and are logged, with no attachment routed.
+
+**Outbound (sending files to users):**
+
+- When the agent queues a file with the `phantom_send_file` tool, images (`image/*`) are sent via `sendPhoto` and everything else via `sendDocument`, with the optional caption.
+- Failures are per-file: a file that cannot be delivered is named in the response text with the reason, never silently dropped.
+
+See [Channels](channels.md#file-attachments) for the cross-channel picture.
+
 ## Troubleshooting
 
 ### Bot not receiving messages

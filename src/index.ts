@@ -6,25 +6,25 @@ import { AgentRuntime } from "./agent/runtime.ts";
 import type { RuntimeEvent } from "./agent/runtime.ts";
 import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
-import { isInterruptText } from "./channels/interrupt.ts";
 import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
 import { ChannelInteractionRegistry } from "./channels/interaction-adapter.ts";
-import { NextcloudChannel } from "./channels/nextcloud.ts";
+import { isInterruptText } from "./channels/interrupt.ts";
 import { createNextcloudInteractionFactory } from "./channels/nextcloud-interaction.ts";
+import { NextcloudChannel } from "./channels/nextcloud.ts";
 import { ChannelRouter } from "./channels/router.ts";
 import { setActionFollowUpHandler } from "./channels/slack-actions.ts";
-import { SlackChannel } from "./channels/slack.ts";
 import { createSlackInteractionFactory } from "./channels/slack-interaction.ts";
-import { TelegramChannel } from "./channels/telegram.ts";
+import { SlackChannel } from "./channels/slack.ts";
 import { createTelegramInteractionFactory } from "./channels/telegram-interaction.ts";
+import { TelegramChannel } from "./channels/telegram.ts";
 import { WebhookChannel } from "./channels/webhook.ts";
 import { loadChannelsConfig, loadConfig } from "./config/loader.ts";
 import { installShutdownHandlers, installUnhandledRejectionGuard, onShutdown } from "./core/graceful.ts";
 import {
 	setChannelHealthProvider,
 	setChatHandler,
-	setEvolutionVersionProvider,
 	setEvolutionMetricsProvider,
+	setEvolutionVersionProvider,
 	setMcpServerProvider,
 	setMemoryHealthProvider,
 	setOnboardingStatusProvider,
@@ -245,7 +245,8 @@ async function main(): Promise<void> {
 			nextcloudChannel: undefined,
 			telegramChannel: undefined,
 			nextcloudOwnerUsername: channelsConfig?.nextcloud?.owner_username ?? null,
-			telegramOwnerChatId: (Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null),
+			telegramOwnerChatId:
+				Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null,
 		});
 		setSchedulerHealthProvider(() => scheduler?.getHealthSummary() ?? null);
 		setSchedulerInstance(scheduler, runtime);
@@ -415,24 +416,30 @@ async function main(): Promise<void> {
 	// Register Nextcloud channel
 	let nextcloudChannel: NextcloudChannel | null = null;
 	if (channelsConfig?.nextcloud?.enabled && channelsConfig.nextcloud.shared_secret) {
-		nextcloudChannel = new NextcloudChannel({
-			sharedSecret: channelsConfig.nextcloud.shared_secret,
-			talkServer: channelsConfig.nextcloud.talk_server,
-			roomToken: channelsConfig.nextcloud.room_token,
-			webhookPath: channelsConfig.nextcloud.webhook_path,
-			port: channelsConfig.nextcloud.port,
-			botId: channelsConfig.nextcloud.bot_id,
-			sessionWindowMinutes: channelsConfig.nextcloud.session_window_minutes,
-			ownerUserId: channelsConfig.nextcloud.owner_user_id,
-			// Enhanced interactions configuration
-			enableFeedback: channelsConfig.nextcloud.enable_feedback,
-			// Talk 24+: join the thread a message belongs to
-			enableThreads: channelsConfig.nextcloud.enable_threads,
-			// Agent interrupt: stop-emoji reaction on the in-flight message
-			interruptReaction: channelsConfig.nextcloud.interrupt_reaction,
-			// Phase 6: Proactive intro configuration
-			sendIntro: channelsConfig.nextcloud.send_intro,
-		}, runtime.sessionStore);
+		nextcloudChannel = new NextcloudChannel(
+			{
+				sharedSecret: channelsConfig.nextcloud.shared_secret,
+				talkServer: channelsConfig.nextcloud.talk_server,
+				roomToken: channelsConfig.nextcloud.room_token,
+				webhookPath: channelsConfig.nextcloud.webhook_path,
+				port: channelsConfig.nextcloud.port,
+				botId: channelsConfig.nextcloud.bot_id,
+				sessionWindowMinutes: channelsConfig.nextcloud.session_window_minutes,
+				ownerUserId: channelsConfig.nextcloud.owner_user_id,
+				// Enhanced interactions configuration
+				enableFeedback: channelsConfig.nextcloud.enable_feedback,
+				// Talk 24+: join the thread a message belongs to
+				enableThreads: channelsConfig.nextcloud.enable_threads,
+				// Agent interrupt: stop-emoji reaction on the in-flight message
+				interruptReaction: channelsConfig.nextcloud.interrupt_reaction,
+				// Phase 6: Proactive intro configuration
+				sendIntro: channelsConfig.nextcloud.send_intro,
+				// Talk 24 file shares: WebDAV service account for downloads
+				phantomId: channelsConfig.nextcloud.phantom_id,
+				phantomAppPass: channelsConfig.nextcloud.phantom_app_pass,
+			},
+			runtime.sessionStore,
+		);
 		router.register(nextcloudChannel);
 		// Agent interrupt: a stop-emoji reaction on the in-flight message
 		// aborts the running turn; the turn delivers "Stopped." itself
@@ -559,9 +566,11 @@ async function main(): Promise<void> {
 	const interactionRegistry = new ChannelInteractionRegistry();
 	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
 	// Phase 2: Pass Nextcloud configuration to interaction factory
-	interactionRegistry.register(createNextcloudInteractionFactory(nextcloudChannel, {
-		enableFeedback: channelsConfig.nextcloud?.enable_feedback,
-	}));
+	interactionRegistry.register(
+		createNextcloudInteractionFactory(nextcloudChannel, {
+			enableFeedback: channelsConfig.nextcloud?.enable_feedback,
+		}),
+	);
 	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));
 
 	const conversationMessages = new Map<string, { user: string[]; assistant: string[] }>();
@@ -641,9 +650,8 @@ async function main(): Promise<void> {
 			// Default delivery: route through ChannelRouter.send. Nextcloud needs
 			// the original message ID as replyToId for threading; other channels
 			// ignore replyToId.
-			const nextcloudMessageId = msg.channelId === "nextcloud"
-				? (msg.metadata?.nextcloudMessageId as number | undefined)
-				: undefined;
+			const nextcloudMessageId =
+				msg.channelId === "nextcloud" ? (msg.metadata?.nextcloudMessageId as number | undefined) : undefined;
 			const replyToId = nextcloudMessageId !== undefined ? String(nextcloudMessageId) : undefined;
 			await router.send(msg.channelId, msg.conversationId, {
 				text: response.text,
@@ -795,7 +803,8 @@ async function main(): Promise<void> {
 	}
 	if (scheduler && telegramChannel) {
 		const telegramOwnerUserIds = channelsConfig?.telegram?.owner_user_ids;
-		const telegramOwnerChatId = (Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null);
+		const telegramOwnerChatId =
+			Array.isArray(telegramOwnerUserIds) && telegramOwnerUserIds.length > 0 ? telegramOwnerUserIds[0] : null;
 		scheduler.setTelegramChannel(telegramChannel, telegramOwnerChatId);
 	}
 	if (scheduler) {

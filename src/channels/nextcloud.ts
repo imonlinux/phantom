@@ -9,12 +9,13 @@
  * session tracking, evolution, and memory consolidation.
  */
 
-import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
-import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { SessionStore } from "../agent/session-store.ts";
 import { emitFeedback } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
+import { TalkFileFetcher, type TalkFileParams, extractTalkFileParams } from "./nextcloud-files.ts";
+import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
 
 export type NextcloudChannelConfig = {
 	sharedSecret: string;
@@ -34,6 +35,10 @@ export type NextcloudChannelConfig = {
 	// Reaction that cancels the running turn when applied to the in-flight
 	// message. Defaults to the stop sign; override or disable via config.
 	interruptReaction?: string;
+	// Talk 24 file shares: service account used to download shared files
+	// over WebDAV. Must be a room participant to see the share mount.
+	phantomId?: string;
+	phantomAppPass?: string;
 };
 
 // Bot feature bitmask from POST /bot/ask-features (Talk 24+, requires the
@@ -120,6 +125,8 @@ export class NextcloudChannel implements Channel {
 	private db: Database | null = null;
 	// Talk 24+: cached ask-features bitmask, null until probed or on failure
 	private botFeatures: number | null = null;
+	// Talk 24 file shares: null until both service-account keys are configured
+	private fileFetcher: TalkFileFetcher | null = null;
 
 	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
@@ -130,6 +137,16 @@ export class NextcloudChannel implements Channel {
 			sessionWindowMinutes: config.sessionWindowMinutes ?? 30,
 		};
 		this.sessionStore = sessionStore ?? null;
+
+		// Talk 24 file shares: only wire the fetcher when fully configured.
+		// A partial config (id without password) must not half-work silently.
+		if (config.phantomId && config.phantomAppPass) {
+			this.fileFetcher = new TalkFileFetcher({
+				talkServer: config.talkServer,
+				userId: config.phantomId,
+				appPassword: config.phantomAppPass,
+			});
+		}
 
 		// Phase 6: Initialize database for intro tracking
 		try {
@@ -291,7 +308,7 @@ export class NextcloudChannel implements Channel {
 		// the thread instead of the room's top level.
 		const suffix = parsed.slice(roomToken.length + 1);
 		const threadMatch = /^thread(\d+)$/.exec(suffix);
-		const threadId = threadMatch ? parseInt(threadMatch[1], 10) : undefined;
+		const threadId = threadMatch ? Number.parseInt(threadMatch[1], 10) : undefined;
 
 		const success = await this.postToNextcloud(roomToken, message.text, message.replyToId, threadId);
 		if (!success) {
@@ -359,7 +376,7 @@ export class NextcloudChannel implements Channel {
 					"Content-Type": "application/json",
 					// OCS endpoints answer XML on a 200 when Accept is absent; the
 					// probe would then fail to parse every valid response
-					"Accept": "application/json",
+					Accept: "application/json",
 					"OCS-APIRequest": "true",
 					"X-Nextcloud-Talk-Bot-Random": random,
 					"X-Nextcloud-Talk-Bot-Signature": sig,
@@ -457,7 +474,7 @@ export class NextcloudChannel implements Channel {
 		const contentLength = req.headers.get("content-length");
 		const MAX_BODY_SIZE = 64 * 1024; // 64 KB - NextCloud messages cap at 32,000 chars
 		if (contentLength) {
-			const length = parseInt(contentLength, 10);
+			const length = Number.parseInt(contentLength, 10);
 			if (!isNaN(length) && length > MAX_BODY_SIZE) {
 				console.warn(`[nextcloud] Request body too large: ${length} bytes`);
 				return Response.json({ error: "Request body too large" }, { status: 413 });
@@ -535,16 +552,26 @@ export class NextcloudChannel implements Channel {
 		// Fix #7: Proper JSON unwrapping for ActivityStreams Note objects
 		let message = rawContent;
 		const objectType = (object?.type as string) ?? "";
+		// Talk 24 file shares carry the file descriptor in the Note content's
+		// "parameters" (previously discarded here), alongside the message text
+		// (the "{file}" placeholder, or the caption when the upload has one).
+		let fileParams: TalkFileParams | null = null;
 		if (objectType === "Note" && rawContent.startsWith("{")) {
 			try {
 				const parsed = JSON.parse(rawContent) as { message?: string; parameters?: Record<string, unknown> };
 				if (typeof parsed?.message === "string") {
 					message = parsed.message;
 				}
+				fileParams = extractTalkFileParams(parsed?.parameters);
 			} catch {
 				// Invalid JSON - use as-is
 			}
 		}
+		// Composer uploads arrive as system messages (type "Activity", object
+		// name "{file_shared}"); captioned uploads arrive as "Create" with the
+		// caption as message text plus the same file parameter. Both route
+		// like an owner message once the bytes are fetched.
+		const isFileShare = fileParams !== null && (type === "Activity" || type === "Create");
 
 		// Fix #6: Reject payloads without target.id instead of silent fallback
 		const roomToken = target?.id;
@@ -562,7 +589,9 @@ export class NextcloudChannel implements Channel {
 		// lifecycle for every change, and logging those at info turns the log
 		// into reaction spam during busy turns.
 		if (type === "Create") {
-			console.log(`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`);
+			console.log(
+				`[nextcloud] ${type} in "${roomName}" from ${actorType} ${actorName} (actorId=${actorId}): ${message.slice(0, 80)}`,
+			);
 		}
 
 		// Reaction feedback: Talk delivers reaction additions as "Like"
@@ -572,9 +601,16 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		// Only process new messages
-		if (type !== "Create") {
+		// Only process new messages (file shares arrive as "Activity" system
+		// messages and route like owner messages, so they pass this gate)
+		if (type !== "Create" && !isFileShare) {
 			return { status: 200, error: undefined };
+		}
+
+		if (isFileShare) {
+			console.log(
+				`[nextcloud] File share "${fileParams?.name}" from ${actorType} ${actorName} (actorId=${actorId}) in "${roomName}" (type=${type})`,
+			);
 		}
 
 		// Fix #12: Bot loop guard - ignore messages from applications/bots and self
@@ -588,10 +624,19 @@ export class NextcloudChannel implements Channel {
 			console.log(`[nextcloud] Ignoring message from self (botId=${actorId})`);
 			return { status: 200, error: undefined };
 		}
+		// Ignore file shares created by our own service account: outbound
+		// deliveries into the conversation folder echo back as file_shared
+		// system messages, and without this gate they would loop.
+		if (isFileShare && this.config.phantomId && actorId === `users/${this.config.phantomId}`) {
+			console.log(`[nextcloud] Ignoring file share from service account (${actorId})`);
+			return { status: 200, error: undefined };
+		}
 
 		// Phase 3: Owner access control - reject messages from non-owners
 		if (!this.isOwner(actorId)) {
-			console.log(`[nextcloud] Rejecting message from non-owner ${actorId} (owner=${this.config.ownerUserId ?? "none"})`);
+			console.log(
+				`[nextcloud] Rejecting message from non-owner ${actorId} (owner=${this.config.ownerUserId ?? "none"})`,
+			);
 			await this.rejectNonOwner(actorId, roomToken);
 			return { status: 200, error: undefined };
 		}
@@ -601,8 +646,53 @@ export class NextcloudChannel implements Channel {
 			return { status: 200, error: undefined };
 		}
 
-		const msgIdNum = typeof object?.id === "number" ? object.id : typeof object?.id === "string" ? parseInt(object.id, 10) : NaN;
+		const msgIdNum =
+			typeof object?.id === "number"
+				? object.id
+				: typeof object?.id === "string"
+					? Number.parseInt(object.id, 10)
+					: Number.NaN;
 		const msgId = !isNaN(msgIdNum) ? msgIdNum : undefined;
+
+		// Talk 24 file shares: download the bytes via the service account
+		// before routing. The placeholder text mirrors the Telegram handlers;
+		// the agent reads the file from the attachments directory. Failures
+		// are announced to the room instead of silently dropping the share.
+		let attachment: NonNullable<InboundMessage["attachments"]> | undefined;
+		if (isFileShare && fileParams) {
+			if (!this.fileFetcher) {
+				console.warn(
+					`[nextcloud] File share "${fileParams.name}" not downloaded: phantom_id/phantom_app_pass not configured`,
+				);
+				await this.postToNextcloud(
+					roomToken,
+					"File share noticed but not downloaded: the phantom WebDAV service account is not configured (phantom_id / phantom_app_pass).",
+				);
+				return { status: 200, error: undefined };
+			}
+			const fetched = await this.fileFetcher.fetchSharedFile(roomToken, actorId, fileParams);
+			if (!fetched.ok) {
+				console.error(`[nextcloud] Failed to download file share "${fileParams.name}": ${fetched.error}`);
+				await this.postToNextcloud(
+					roomToken,
+					`File share could not be downloaded: ${fileParams.name} (${fetched.error}).`,
+				);
+				return { status: 200, error: undefined };
+			}
+			const saved = await this.saveTalkAttachment(fetched.buffer, fileParams.name, msgId);
+			attachment = [
+				{
+					filename: saved.filename,
+					path: saved.path,
+					size: saved.size,
+					mimeType: fileParams.mimetype,
+				},
+			];
+			// Caption rides along when the upload had one (the raw "{file}"
+			// placeholder means no caption was set)
+			const placeholder = `[File attachment: ${saved.filename}]`;
+			message = message && message !== "{file}" ? `${placeholder} ${message}` : placeholder;
+		}
 
 		// Fix: Time-window coalescing for session continuity
 		// Precedence: a real Talk thread (Talk 24+ payloads carry object.threadId
@@ -610,25 +700,28 @@ export class NextcloudChannel implements Channel {
 		// time-window lookup. Thread roots use a "thread{N}" namespace so they
 		// can never collide with message-ID roots, and send() maps them back to
 		// the numeric threadId on outbound posts.
-		const parentMessageIdNum = typeof object?.parentMessageId === "number"
-			? object.parentMessageId
-			: typeof object?.parentMessageId === "string"
-				? parseInt(object.parentMessageId, 10)
-				: NaN;
+		const parentMessageIdNum =
+			typeof object?.parentMessageId === "number"
+				? object.parentMessageId
+				: typeof object?.parentMessageId === "string"
+					? Number.parseInt(object.parentMessageId, 10)
+					: Number.NaN;
 		const parentMessageId = !isNaN(parentMessageIdNum) ? parentMessageIdNum : undefined;
 
-		const threadIdNum = typeof object?.threadId === "number"
-			? object.threadId
-			: typeof object?.threadId === "string"
-				? parseInt(object.threadId, 10)
-				: NaN;
+		const threadIdNum =
+			typeof object?.threadId === "number"
+				? object.threadId
+				: typeof object?.threadId === "string"
+					? Number.parseInt(object.threadId, 10)
+					: Number.NaN;
 		const threadId = !isNaN(threadIdNum) ? threadIdNum : undefined;
 
-		const replyParentIdNum = typeof object?.inReplyTo?.object?.id === "number"
-			? object.inReplyTo.object.id
-			: typeof object?.inReplyTo?.object?.id === "string"
-				? parseInt(object.inReplyTo.object.id, 10)
-				: NaN;
+		const replyParentIdNum =
+			typeof object?.inReplyTo?.object?.id === "number"
+				? object.inReplyTo.object.id
+				: typeof object?.inReplyTo?.object?.id === "string"
+					? Number.parseInt(object.inReplyTo.object.id, 10)
+					: Number.NaN;
 		const replyParentId = !isNaN(replyParentIdNum) ? replyParentIdNum : undefined;
 
 		let threadRoot: number | string;
@@ -676,6 +769,7 @@ export class NextcloudChannel implements Channel {
 			senderName: actorName,
 			text: message,
 			timestamp: new Date(),
+			attachments: attachment,
 			metadata: {
 				nextcloudRoomToken: roomToken,
 				nextcloudMessageId: msgId,
@@ -709,6 +803,26 @@ export class NextcloudChannel implements Channel {
 		return { status: 200, error: undefined };
 	}
 
+	// Talk 24 file shares: persist the download next to the Telegram
+	// attachments. The id prefix keeps same-named shares from colliding.
+	private async saveTalkAttachment(
+		buffer: Buffer,
+		fileName: string,
+		msgId?: number,
+	): Promise<{ filename: string; path: string; size: number }> {
+		const fs = await import("node:fs");
+		const dir = "/app/data/attachments";
+		if (!fs.existsSync(dir)) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		const safeName = fileName.replace(/[/\\]/g, "_");
+		const filename = `talk-${msgId ?? Date.now()}-${safeName}`;
+		const path = `${dir}/${filename}`;
+		await Bun.write(path, buffer);
+		console.log(`[nextcloud] Saved file share: ${filename} (${buffer.length} bytes)`);
+		return { filename, path, size: buffer.length };
+	}
+
 	private verifySignature(random: string, body: string, signature: string): boolean {
 		try {
 			const hmac = createHmac("sha256", this.config.sharedSecret);
@@ -737,7 +851,12 @@ export class NextcloudChannel implements Channel {
 		return hmac.digest("hex");
 	}
 
-	private async postToNextcloud(roomToken: string, message: string, replyTo?: string, threadId?: number): Promise<boolean> {
+	private async postToNextcloud(
+		roomToken: string,
+		message: string,
+		replyTo?: string,
+		threadId?: number,
+	): Promise<boolean> {
 		// Fix #17: Validate and sanitize talkServer config
 		let talkServer = this.config.talkServer.trim();
 		// Remove scheme if present
@@ -757,7 +876,7 @@ export class NextcloudChannel implements Channel {
 
 		const payload: Record<string, unknown> = { message };
 		if (replyTo !== undefined) {
-			const replyId = parseInt(replyTo, 10);
+			const replyId = Number.parseInt(replyTo, 10);
 			if (!isNaN(replyId)) {
 				payload.replyTo = replyId;
 			}
@@ -796,7 +915,7 @@ export class NextcloudChannel implements Channel {
 					if (attempt < maxRetries - 1) {
 						// Rate limited - check Retry-After header
 						const retryAfter = res.headers.get("Retry-After");
-						const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+						const delayMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
 						console.log(`[nextcloud] Rate limited, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
 						await this.sleep(delayMs);
 						continue;
@@ -811,7 +930,9 @@ export class NextcloudChannel implements Channel {
 					// Server error - retry with exponential backoff plus jitter
 					const base = 1000 * Math.pow(2, attempt);
 					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
-					console.log(`[nextcloud] Server error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					console.log(
+						`[nextcloud] Server error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`,
+					);
 					await this.sleep(delayMs);
 					continue;
 				}
@@ -838,7 +959,7 @@ export class NextcloudChannel implements Channel {
 
 	// Helper method for retry delays
 	private sleep(ms: number): Promise<void> {
-		return new Promise(resolve => setTimeout(resolve, ms));
+		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
 	// Fix #10: Make setReaction return boolean for error handling
@@ -898,7 +1019,9 @@ export class NextcloudChannel implements Channel {
 					// Server error - retry with exponential backoff plus jitter
 					const base = 1000 * Math.pow(2, attempt);
 					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
-					console.log(`[nextcloud] Reaction error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					console.log(
+						`[nextcloud] Reaction error ${res.status}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`,
+					);
 					await this.sleep(delayMs);
 					continue;
 				}
@@ -911,7 +1034,9 @@ export class NextcloudChannel implements Channel {
 				if (attempt < maxRetries - 1) {
 					const base = 1000 * Math.pow(2, attempt);
 					const delayMs = Math.floor(base * (0.5 + Math.random())); // 50%–150% of base
-					console.log(`[nextcloud] Network error setting reaction, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					console.log(
+						`[nextcloud] Network error setting reaction, retrying after ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`,
+					);
 					await this.sleep(delayMs);
 				} else {
 					console.error("[nextcloud] Network error setting reaction:", err);
@@ -1079,9 +1204,9 @@ export class NextcloudChannel implements Channel {
 
 		try {
 			// Check if intro was already sent
-			const row = this.db
-				.query("SELECT intro_sent_at FROM channel_intros WHERE channel_id = 'nextcloud'")
-				.get() as { intro_sent_at?: string } | undefined;
+			const row = this.db.query("SELECT intro_sent_at FROM channel_intros WHERE channel_id = 'nextcloud'").get() as
+				| { intro_sent_at?: string }
+				| undefined;
 
 			if (row?.intro_sent_at) {
 				console.log("[nextcloud] Intro message already sent on previous startup");
@@ -1089,8 +1214,7 @@ export class NextcloudChannel implements Channel {
 			}
 
 			// Send intro message to configured room
-			const introText =
-				"Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.";
+			const introText = "Hi, I'm Phantom. I'm now connected and listening here. Send /help to see what I can do.";
 			await this.postToNextcloud(roomToken, introText);
 
 			// Mark as sent
@@ -1106,5 +1230,4 @@ export class NextcloudChannel implements Channel {
 			// Don't throw - this is a best-effort welcome message
 		}
 	}
-
 }

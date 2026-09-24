@@ -98,9 +98,9 @@ export const TelegramChannelConfigSchema = z.object({
 	// Find your ID by sending any message to @userinfobot on Telegram.
 	// Use the numeric ID, not your @username.
 	// P5.5: Validate format to prevent obviously-invalid values (negative, empty, non-numeric).
-	owner_user_ids: z.array(
-		z.string().regex(/^\d+$/, "Telegram user IDs must be numeric strings (e.g., '123456789')")
-	).default([]),
+	owner_user_ids: z
+		.array(z.string().regex(/^\d+$/, "Telegram user IDs must be numeric strings (e.g., '123456789')"))
+		.default([]),
 	// P5.5: Optional custom rejection message for non-owners in DMs.
 	// Defaults to Phantom's standard message. Useful for forks and private deployments.
 	rejection_reply: z.string().optional(),
@@ -180,6 +180,13 @@ export const NextcloudChannelConfigSchema = z
 		// Reaction that cancels the running turn when applied to the
 		// in-flight message (agent interrupt). Defaults to 🛑 when omitted.
 		interrupt_reaction: z.string().optional(),
+		// Talk 24 file shares: service-account credentials used to download
+		// files shared into the conversation over WebDAV. The account must be
+		// a room participant to see the conversation folder share mount.
+		// Both keys required for fetching; with either missing, file shares
+		// are announced to the room but not downloaded.
+		phantom_id: z.string().optional(),
+		phantom_app_pass: z.string().optional(),
 	})
 	.strict();
 

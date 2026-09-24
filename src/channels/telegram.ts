@@ -54,9 +54,10 @@ type TelegramApi = {
 		reaction: Array<{ type: "emoji"; emoji: string }>,
 		isBig?: boolean,
 	) => Promise<unknown>;
+	getFile: (fileId: string) => Promise<{ file_path?: string }>;
 };
 
-type TelegrafContext = {
+export type TelegrafContext = {
 	// Raw Telegraf update envelope; reaction handlers narrow it locally.
 	update?: unknown;
 	message?: {
@@ -64,6 +65,10 @@ type TelegrafContext = {
 		from?: { id: number; first_name?: string; username?: string };
 		chat: { id: number; type?: "private" | "group" | "supergroup" | "channel" };
 		message_id: number;
+		// Photo updates carry a resolution ladder; handlers use the last entry.
+		photo?: Array<{ file_id: string; file_size?: number }>;
+		// "Send as file" images and other documents.
+		document?: { file_id: string; file_name?: string; file_size?: number; mime_type?: string };
 	};
 	reply: (text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
 	telegram: TelegramApi;
@@ -1572,6 +1577,107 @@ export class TelegramChannel implements Channel {
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.error(`[telegram] Error handling document: ${msg}`);
+			}
+		});
+
+		// Handle photo attachments. Images sent normally (compressed) arrive as
+		// "photo" updates carrying a resolution ladder; only "Send as file"
+		// images arrive as documents. Mirror the document handler: download the
+		// largest variant, save it, and route the same placeholder text so the
+		// agent reads the file from the attachments directory.
+		this.bot.on("photo", async (ctx) => {
+			if (!this.messageHandler || !ctx.message?.photo?.length) return;
+
+			const photo = ctx.message.photo[ctx.message.photo.length - 1];
+			const chatId = ctx.message.chat.id;
+			const chatType = ctx.message.chat.type;
+			const from = ctx.message.from;
+			const senderId = String(from?.id ?? "unknown");
+
+			// P3: access control gate
+			const access = this.resolveAccess(senderId, chatType);
+			if (access === "ignore") return;
+			if (access === "reject_dm") {
+				this.rejectedUsers.add(senderId);
+				try {
+					const reply = this.config.rejectionReply ?? DEFAULT_REJECTION_REPLY;
+					await this.bot?.telegram.sendMessage(chatId, reply);
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.warn(`[telegram] Failed to send rejection reply: ${msg}`);
+				}
+				return;
+			}
+
+			const conversationId = `telegram:${chatId}`;
+			const fileId = photo.file_id;
+
+			try {
+				// Get file info from Telegram
+				const file = await this.bot?.telegram.getFile(fileId);
+				if (!file) {
+					console.error(`[telegram] Failed to get file info for ${fileId}`);
+					return;
+				}
+
+				// Download file content
+				const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
+				const response = await fetch(fileUrl);
+				if (!response.ok) {
+					console.error(`[telegram] Failed to download photo: ${response.statusText}`);
+					return;
+				}
+
+				const fileContent = await response.arrayBuffer();
+				const buffer = Buffer.from(fileContent);
+
+				// Photos carry no file_name. Derive the extension from the
+				// file_path Telegram returns (Bot API serves photos as JPEG).
+				const ext = file.file_path?.includes(".")
+					? (file.file_path.split(".").pop() ?? "jpg")
+					: "jpg";
+				const fileName = `telegram-photo-${ctx.message.message_id}.${ext}`;
+
+				// Save to attachments directory
+				const fs = await import("node:fs");
+				const attachmentsDir = "/app/data/attachments";
+
+				// Ensure directory exists
+				if (!fs.existsSync(attachmentsDir)) {
+					fs.mkdirSync(attachmentsDir, { recursive: true });
+				}
+
+				const filePath = `${attachmentsDir}/${fileName}`;
+				await Bun.write(filePath, buffer);
+
+				console.log(`[telegram] Saved photo: ${fileName} (${buffer.length} bytes)`);
+
+				// Create inbound message with attachment info
+				const inbound: InboundMessage = {
+					id: String(ctx.message.message_id),
+					channelId: this.id,
+					conversationId,
+					senderId,
+					senderName: from?.first_name ?? from?.username,
+					text: `[Photo attachment: ${fileName}]`,
+					timestamp: new Date(),
+					attachments: [{
+						filename: fileName,
+						path: filePath,
+						size: buffer.length,
+						mimeType: "image/jpeg",
+					}],
+					metadata: {
+						telegramChatId: chatId,
+						telegramMessageId: ctx.message.message_id,
+						telegramFileId: fileId,
+					},
+				};
+
+				await this.messageHandler(inbound);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[telegram] Error handling photo: ${msg}`);
 			}
 		});
 

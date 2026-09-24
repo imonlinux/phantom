@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { MAX_TALK_FILE_BYTES, TalkFileFetcher, extractTalkFileParams, rawNcUserId } from "../nextcloud-files.ts";
 import { NextcloudChannel, type NextcloudChannelConfig } from "../nextcloud.ts";
-import type { InboundMessage } from "../types.ts";
+import type { InboundMessage, PendingAttachment } from "../types.ts";
 
 // File shares must not touch the real filesystem in tests: stub node:fs and
 // Bun.write so the handler's save step is captured, not executed.
@@ -248,13 +248,21 @@ describe("TalkFileFetcher.uploadToConversation", () => {
 		return new TalkFileFetcher({ talkServer: "nextcloud.example.com", userId: PHANTOM_ID, appPassword: "pw" });
 	}
 
-	function stubUploadDav(options?: { propfindSharer?: string[]; putStatus?: number; put404First?: boolean }) {
-		const calls: Array<{ method: string; url: string }> = [];
+	function stubUploadDav(options?: {
+		propfindSharer?: string[];
+		putStatus?: number;
+		put404First?: boolean;
+		roomShareStatus?: number;
+		roomShareAlreadyShared?: boolean;
+		linkShareStatus?: number;
+	}) {
+		const calls: Array<{ method: string; url: string; body?: string; headers?: HeadersInit }> = [];
 		let putCount = 0;
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			const method = init?.method ?? "GET";
-			calls.push({ method, url });
+			const body = init?.body == null ? undefined : String(init.body);
+			calls.push({ method, url, body, headers: init?.headers });
 			if (method === "PROPFIND") {
 				if (url.endsWith("/Talk")) {
 					return davPropfindResponse([`James McMurphy-${ROOM}`, "Other-room-xyz"]);
@@ -266,6 +274,30 @@ describe("TalkFileFetcher.uploadToConversation", () => {
 				putCount += 1;
 				if (options?.put404First && putCount === 1) return new Response("gone", { status: 404 });
 				return new Response("", { status: options?.putStatus ?? 201 });
+			}
+			if (method === "POST") {
+				if (body?.includes("shareType=10")) {
+					if (options?.roomShareAlreadyShared) {
+						return new Response(
+							'<?xml version="1.0"?><ocs><meta><status>failure</status><statuscode>403</statuscode><message>Path is already shared with this conversation</message></meta></ocs>',
+							{ status: 403 },
+						);
+					}
+					return new Response(JSON.stringify({ ocs: { meta: { status: "ok" }, data: { id: 90 } } }), {
+						status: options?.roomShareStatus ?? 200,
+					});
+				}
+				if (body?.includes("shareType=3")) {
+					return new Response(
+						JSON.stringify({
+							ocs: {
+								meta: { status: "ok" },
+								data: { id: 91, token: "linkToken", url: "https://nextcloud.example.com/s/linkToken" },
+							},
+						}),
+						{ status: options?.linkShareStatus ?? 200 },
+					);
+				}
 			}
 			return new Response("unexpected", { status: 500 });
 		}) as typeof fetch;
@@ -305,6 +337,133 @@ describe("TalkFileFetcher.uploadToConversation", () => {
 		// 2 initial PROPFINDs + 2 retry PROPFINDs after cache invalidation
 		expect(calls.filter((c) => c.method === "PROPFIND").length).toBe(4);
 		expect(calls.filter((c) => c.method === "PUT").length).toBe(2);
+	});
+
+	test("room-shares the uploaded path after the PUT", async () => {
+		const calls = stubUploadDav();
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.delivery).toBe("room-share");
+			expect(result.link).toBeUndefined();
+		}
+		const shares = calls.filter((c) => c.method === "POST" && c.body?.includes("shareType=10"));
+		expect(shares.length).toBe(1);
+		const share = shares[0];
+		expect(share.url).toBe("https://nextcloud.example.com/ocs/v2.php/apps/files_sharing/api/v1/shares");
+		const params = new URLSearchParams(share.body);
+		expect(params.get("path")).toBe(`Talk/James McMurphy-${ROOM}/Phantom-phantom/report.pdf`);
+		expect(params.get("shareType")).toBe("10");
+		expect(params.get("shareWith")).toBe(ROOM);
+		const headers = new Headers(share.headers);
+		expect(headers.get("OCS-APIRequest")).toBe("true");
+	});
+
+	test("treats a 403 already-shared room share as delivered", async () => {
+		const calls = stubUploadDav({ roomShareAlreadyShared: true });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.delivery).toBe("room-share");
+		expect(calls.filter((c) => c.method === "POST" && c.body?.includes("shareType=3")).length).toBe(0);
+	});
+
+	test("falls back to a public link share when the room share fails", async () => {
+		const calls = stubUploadDav({ roomShareStatus: 500 });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.delivery).toBe("link");
+			expect(result.link).toBe("https://nextcloud.example.com/s/linkToken");
+		}
+		expect(calls.filter((c) => c.method === "POST" && c.body?.includes("shareType=3")).length).toBe(1);
+	});
+
+	test("reports folder-only delivery when both share calls fail", async () => {
+		const calls = stubUploadDav({ roomShareStatus: 500, linkShareStatus: 500 });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.delivery).toBe("folder");
+			expect(result.link).toBeUndefined();
+		}
+		expect(calls.filter((c) => c.method === "POST").length).toBe(2);
+	});
+});
+
+describe("outbound attachment note buckets", () => {
+	const originalFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	function stubOutboundDav(options?: { roomShareStatus?: number; linkShareStatus?: number; putStatus?: number }) {
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			if (method === "PROPFIND") {
+				if (url.endsWith("/Talk")) return davPropfindResponse([`James McMurphy-${ROOM}`]);
+				return davPropfindResponse(["Phantom-phantom", "James McMurphy-james"]);
+			}
+			if (method === "PUT") return new Response("", { status: options?.putStatus ?? 201 });
+			if (method === "POST") {
+				const body = init?.body == null ? "" : String(init.body);
+				if (body.includes("shareType=10")) {
+					return new Response(JSON.stringify({ ocs: { meta: { status: "ok" }, data: { id: 90 } } }), {
+						status: options?.roomShareStatus ?? 200,
+					});
+				}
+				if (body.includes("shareType=3")) {
+					return new Response(
+						JSON.stringify({
+							ocs: {
+								meta: { status: "ok" },
+								data: { id: 91, token: "linkToken", url: "https://nextcloud.example.com/s/linkToken" },
+							},
+						}),
+						{ status: options?.linkShareStatus ?? 200 },
+					);
+				}
+			}
+			return new Response("unexpected", { status: 500 });
+		}) as typeof fetch;
+	}
+
+	async function pendingAttachment(): Promise<PendingAttachment> {
+		const path = `/tmp/nc-note-test-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+		await Bun.write(path, "note-bytes");
+		return { path, filename: "report.pdf", size: 10, mimeType: "application/pdf" };
+	}
+
+	async function noteFor(options?: {
+		roomShareStatus?: number;
+		linkShareStatus?: number;
+		putStatus?: number;
+	}): Promise<string> {
+		stubOutboundDav(options);
+		const channel = new NextcloudChannel(baseConfig());
+		const attachment = await pendingAttachment();
+		return channel.uploadTalkAttachments(ROOM, [attachment]);
+	}
+
+	test("room-shared attachments produce no note", async () => {
+		const note = await noteFor();
+		expect(note).toBe("");
+	});
+
+	test("link fallbacks produce a one-line link note", async () => {
+		const note = await noteFor({ roomShareStatus: 500 });
+		expect(note).toBe("\n\n📎 report.pdf: https://nextcloud.example.com/s/linkToken");
+	});
+
+	test("folder-only uploads keep the folder note", async () => {
+		const note = await noteFor({ roomShareStatus: 500, linkShareStatus: 500 });
+		expect(note).toBe("\n\n📎 Attached to the conversation folder: report.pdf");
+	});
+
+	test("failed uploads keep the failure note", async () => {
+		const note = await noteFor({ putStatus: 500 });
+		expect(note).toContain("Could not attach: report.pdf");
 	});
 });
 

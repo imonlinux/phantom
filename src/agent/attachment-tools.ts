@@ -54,7 +54,7 @@ export function createAttachmentToolServer(collector: PendingAttachment[]): McpS
 		"phantom_send_file",
 		"Queue a local file to be delivered as an attachment with this turn's response. " +
 			"The file is sent to the user's channel (Telegram document/photo, email attachment, " +
-			"Nextcloud Talk conversation folder) when the response is delivered. " +
+			"Nextcloud Talk file message) when the response is delivered. " +
 			"Validate the path exists first; calling this does not send anything immediately.",
 		{
 			path: z.string().min(1).describe("Absolute path of the file to attach"),

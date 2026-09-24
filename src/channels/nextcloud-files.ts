@@ -1,12 +1,19 @@
 /**
- * Talk 24 file-share fetching via the phantom service account (WebDAV).
+ * Talk 24 file-share fetching and outbound upload via the phantom service
+ * account (WebDAV + OCS).
  *
  * Composer uploads land in the conversation folder (/Talk/<name>-<token>)
- * which Talk shares to the room as a folder-level share. A service account
- * that is a room participant sees the folder in its own WebDAV tree, with
- * one subfolder per sharer (<display name>-<user id>). This module resolves
- * that path and downloads the file. The bot webhook payload only carries
- * the bare file name, so the folder walk is how we find the bytes.
+ * with one subfolder per sharer (<display name>-<user id>). Participants
+ * see ONLY their own subfolder in the Files app; visibility in the room
+ * comes from the OCS room share, not the folder itself.
+ *
+ * Inbound: the bot webhook payload only carries the bare file name, so the
+ * folder walk is how we find the bytes.
+ *
+ * Outbound: uploadToConversation PUTs the file and then room-shares it
+ * (IShare::TYPE_ROOM), which makes Talk post the file_shared chat message
+ * to the room. Fallback ladder: room share -> public link share ->
+ * folder note appended to the response text.
  */
 import { Buffer } from "node:buffer";
 
@@ -41,6 +48,18 @@ export function extractTalkFileParams(parameters: unknown): TalkFileParams | nul
 }
 
 export const MAX_TALK_FILE_BYTES = 50 * 1024 * 1024;
+
+// IShare::TYPE_ROOM and IShare::TYPE_LINK from Nextcloud's share API.
+// shareType 7 is TYPE_REMOTE_GROUP and fails with a 500 (OCS 996), so the
+// values are pinned here rather than guessed.
+const SHARE_TYPE_ROOM = 10;
+const SHARE_TYPE_LINK = 3;
+
+export type TalkUploadDelivery = "room-share" | "link" | "folder";
+
+export type TalkUploadResult =
+	| { ok: true; path: string; delivery: TalkUploadDelivery; link?: string }
+	| { ok: false; error: string };
 
 export type TalkFileResult = { ok: true; buffer: Buffer } | { ok: false; error: string };
 
@@ -228,16 +247,18 @@ export class TalkFileFetcher {
 	}
 
 	/**
-	 * Upload a file into the conversation so room members receive it through
-	 * the conversation-folder share (the Bot API cannot attach files). The
-	 * service account writes into its own sharer subfolder; Talk exposes the
-	 * whole conversation folder to every participant via the TYPE_ROOM share.
+	 * Upload a file into the conversation and deliver it to room members
+	 * (the Bot API cannot attach files). The service account writes into
+	 * its own sharer subfolder, then room-shares the path so Talk posts the
+	 * file_shared chat message; that message is the delivery participants
+	 * actually see. Falls back to a public link share, then to the plain
+	 * folder upload (caller appends a note).
 	 */
 	async uploadToConversation(
 		roomToken: string,
 		fileName: string,
 		data: Buffer,
-	): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+	): Promise<TalkUploadResult> {
 		const conv = await this.resolveConvFolderCached(roomToken);
 		if (!conv.ok) return conv;
 
@@ -281,7 +302,87 @@ export class TalkFileFetcher {
 		if (!res.ok) {
 			return { ok: false, error: `PUT ${res.status}` };
 		}
-		return { ok: true, path: `Talk/${conv.folder}/${out.folder}/${fileName}` };
+		const path = `Talk/${conv.folder}/${out.folder}/${fileName}`;
+		const shared = await this.shareFileToRoom(path, roomToken);
+		if (shared.ok) return { ok: true, path, delivery: "room-share" };
+
+		const link = await this.createPublicLink(path);
+		if (link.ok) return { ok: true, path, delivery: "link", link: link.url };
+		return { ok: true, path, delivery: "folder" };
+	}
+
+	private ocsBase(): string {
+		return `https://${this.creds.talkServer}/ocs/v2.php/apps/files_sharing/api/v1`;
+	}
+
+	/**
+	 * Room-share an uploaded file (the second half of the composer flow):
+	 * Talk intercepts the share and posts the file_shared chat message to
+	 * the room. Room shares are deduped per path, so a 403 "already shared"
+	 * means the same path was shared before (PUT overwrite) and the existing
+	 * share serves the fresh bytes; treat it as success.
+	 */
+	private async shareFileToRoom(
+		path: string,
+		roomToken: string,
+	): Promise<{ ok: true } | { ok: false; error: string }> {
+		let res: Response;
+		try {
+			res = await fetch(`${this.ocsBase()}/shares`, {
+				method: "POST",
+				headers: {
+					Authorization: this.authHeader(),
+					"OCS-APIRequest": "true",
+					Accept: "application/json",
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+				body: new URLSearchParams({ path, shareType: String(SHARE_TYPE_ROOM), shareWith: roomToken }),
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `room share failed: ${msg}` };
+		}
+		if (res.ok) return { ok: true };
+		if (res.status === 403) {
+			const body = await res.text().catch(() => "");
+			if (/already shared/i.test(body)) return { ok: true };
+		}
+		return { ok: false, error: `room share ${res.status}` };
+	}
+
+	private async createPublicLink(
+		path: string,
+	): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+		let res: Response;
+		try {
+			res = await fetch(`${this.ocsBase()}/shares`, {
+				method: "POST",
+				headers: {
+					Authorization: this.authHeader(),
+					"OCS-APIRequest": "true",
+					Accept: "application/json",
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+				body: new URLSearchParams({ path, shareType: String(SHARE_TYPE_LINK) }),
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `link share failed: ${msg}` };
+		}
+		if (!res.ok) return { ok: false, error: `link share ${res.status}` };
+		try {
+			const json = (await res.json()) as { ocs?: { data?: { url?: string; token?: string } } };
+			const url = json.ocs?.data?.url;
+			if (typeof url === "string" && url.length > 0) return { ok: true, url };
+			const token = json.ocs?.data?.token;
+			if (typeof token === "string" && token.length > 0) {
+				return { ok: true, url: `https://${this.creds.talkServer}/s/${token}` };
+			}
+			return { ok: false, error: "link share response missing url" };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `link share parse failed: ${msg}` };
+		}
 	}
 
 	private async resolveConvFolderCached(

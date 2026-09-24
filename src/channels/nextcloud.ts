@@ -341,16 +341,18 @@ export class NextcloudChannel implements Channel {
 	}
 
 	/**
-	 * Upload queued files into the conversation folder (the Bot API cannot
-	 * attach files) and build the note appended to the response text.
-	 * Uploads happen even when the text note is the only trace: room members
-	 * receive the files through the conversation-folder share.
+	 * Upload queued files into the conversation and build the note appended
+	 * to the response text. Room-shared files get NO note: Talk posts the
+	 * file_shared chat message itself, which is the delivery. Linked files
+	 * get a one-line link, folder-only files keep the folder note.
 	 */
 	private async attachmentNote(roomToken: string, attachments: PendingAttachment[]): Promise<string> {
 		if (!this.fileFetcher) {
 			return attachmentsFallbackNote(attachments);
 		}
-		const delivered: string[] = [];
+		const roomShared: string[] = [];
+		const linked: Array<{ name: string; link: string }> = [];
+		const folderOnly: string[] = [];
 		const failed: Array<{ name: string; error: string }> = [];
 		for (const attachment of attachments) {
 			const loaded = await readAttachmentBuffer(attachment);
@@ -359,12 +361,21 @@ export class NextcloudChannel implements Channel {
 				continue;
 			}
 			const uploaded = await this.fileFetcher.uploadToConversation(roomToken, attachment.filename, loaded.buffer);
-			if (uploaded.ok) delivered.push(attachment.filename);
-			else failed.push({ name: attachment.filename, error: uploaded.error });
+			if (!uploaded.ok) {
+				failed.push({ name: attachment.filename, error: uploaded.error });
+				continue;
+			}
+			if (uploaded.delivery === "room-share") roomShared.push(attachment.filename);
+			else if (uploaded.delivery === "link" && uploaded.link) {
+				linked.push({ name: attachment.filename, link: uploaded.link });
+			} else folderOnly.push(attachment.filename);
 		}
 		let note = "";
-		if (delivered.length > 0) {
-			note += `\n\n📎 Attached to the conversation folder: ${delivered.join(", ")}`;
+		if (linked.length > 0) {
+			note += `\n\n${linked.map((l) => `📎 ${l.name}: ${l.link}`).join("\n")}`;
+		}
+		if (folderOnly.length > 0) {
+			note += `\n\n📎 Attached to the conversation folder: ${folderOnly.join(", ")}`;
 		}
 		if (failed.length > 0) {
 			note += `\n\n${attachmentFailureNote(failed)}`;

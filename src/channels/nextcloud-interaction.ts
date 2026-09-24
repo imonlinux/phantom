@@ -138,8 +138,9 @@ export function createNextcloudInteractionFactory(
 			},
 
 			async deliverResponse({ text, attachments }): Promise<boolean> {
-				// Outbound files ride the conversation-folder share (Bot API
-				// cannot attach); the note names what landed where.
+				// Outbound files are room-shared so Talk posts the file_shared
+				// chat message; the returned note (link/folder/failed) may be
+				// empty when every file rode the room share.
 				let fullText = text;
 				if (attachments && attachments.length > 0) {
 					fullText += await nc.uploadTalkAttachments(rt, attachments);

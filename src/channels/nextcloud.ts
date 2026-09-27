@@ -1216,8 +1216,10 @@ export class NextcloudChannel implements Channel {
 		if (!auth) return false;
 
 		try {
+			// Talk 20+ edit route is /chat/{token}/{messageId}: there is no
+			// "message" path segment (ChatController ApiRoute in spreed).
 			const res = await fetch(
-				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/message/${encodeURIComponent(String(messageId))}`),
+				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/${encodeURIComponent(String(messageId))}`),
 				{
 					method: "PUT",
 					headers: {
@@ -1245,8 +1247,9 @@ export class NextcloudChannel implements Channel {
 		if (!auth) return false;
 
 		try {
+			// Same route family as the edit: /chat/{token}/{messageId}
 			const res = await fetch(
-				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/message/${encodeURIComponent(String(messageId))}`),
+				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/${encodeURIComponent(String(messageId))}`),
 				{
 					method: "DELETE",
 					headers: {

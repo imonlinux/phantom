@@ -43,8 +43,9 @@ describe("NextcloudChannel service-account chat API (working text)", () => {
 	let chatPostFailures = 0; // number of initial chat POSTs that answer 500
 
 	function stubResponse(url: string): Response {
-		if (url.includes("/chat/") && url.includes("/message/")) {
-			// edit (PUT) / delete (DELETE) on a specific message
+		// Edit/delete target /chat/{token}/{messageId}: an id suffix after
+		// the token distinguishes them from the bare post endpoint.
+		if (/\/chat\/[^/]+\/[0-9]+$/.test(url)) {
 			return Response.json({ ocs: { meta: {}, data: null } }, { status: 200 });
 		}
 		if (url.includes("/chat/")) {
@@ -164,7 +165,7 @@ describe("NextcloudChannel service-account chat API (working text)", () => {
 			expect(chatCalls).toHaveLength(1);
 			const call = chatCalls[0];
 			expect(call.method).toBe("PUT");
-			expect(call.url).toBe(`https://${TALK_SERVER}/ocs/v2.php/apps/spreed/api/v1/chat/${ROOM_TOKEN}/message/4242`);
+			expect(call.url).toBe(`https://${TALK_SERVER}/ocs/v2.php/apps/spreed/api/v1/chat/${ROOM_TOKEN}/4242`);
 			expect(JSON.parse(call.body).message).toBe("> Reading /src/main.ts");
 		});
 
@@ -183,7 +184,7 @@ describe("NextcloudChannel service-account chat API (working text)", () => {
 			expect(ok).toBe(true);
 			expect(chatCalls[0].method).toBe("DELETE");
 			expect(chatCalls[0].url).toBe(
-				`https://${TALK_SERVER}/ocs/v2.php/apps/spreed/api/v1/chat/${ROOM_TOKEN}/message/4242`,
+				`https://${TALK_SERVER}/ocs/v2.php/apps/spreed/api/v1/chat/${ROOM_TOKEN}/4242`,
 			);
 		});
 
@@ -191,7 +192,7 @@ describe("NextcloudChannel service-account chat API (working text)", () => {
 			// Stack a dedicated 404 stub on top of the suite stub
 			globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-				if (url.includes(TALK_SERVER) && url.includes("/message/")) {
+				if (url.includes(TALK_SERVER) && /\/chat\/[^/]+\/[0-9]+$/.test(url)) {
 					return new Response("Not Found", { status: 404 });
 				}
 				return realFetch(input, init);

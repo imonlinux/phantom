@@ -292,7 +292,7 @@ function makeWorkingTextFactory(
 }
 
 describe("working text (progressive updates)", () => {
-	test("suppression: no queued reaction and no placeholder until onTurnStart", async () => {
+	test("suppression: no queued reaction and no placeholder before the first tool activity", async () => {
 		const { channel, calls } = makeWorkingTextChannel();
 		const factory = makeWorkingTextFactory(channel);
 
@@ -303,12 +303,13 @@ describe("working text (progressive updates)", () => {
 		expect(calls.postChatMessage).toHaveLength(0);
 	});
 
-	test("onTurnStart posts a silent placeholder with the working-text header", async () => {
+	test("the first tool activity posts a silent placeholder with the working-text header", async () => {
 		const { channel, calls } = makeWorkingTextChannel();
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: { file_path: "/src/main.ts" } });
+		await new Promise((r) => setTimeout(r, 60));
 
 		expect(calls.postChatMessage).toHaveLength(1);
 		const call = calls.postChatMessage[0];
@@ -322,7 +323,8 @@ describe("working text (progressive updates)", () => {
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage({ nextcloudThreadId: 77 }));
-		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		await new Promise((r) => setTimeout(r, 60));
 
 		expect(calls.postChatMessage[0].opts?.threadId).toBe(77);
 	});
@@ -332,7 +334,6 @@ describe("working text (progressive updates)", () => {
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
 		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: { file_path: "/src/main.ts" } });
 		await new Promise((r) => setTimeout(r, 120));
 
@@ -344,12 +345,23 @@ describe("working text (progressive updates)", () => {
 		expect(edit.message).toContain("Reading /src/main.ts");
 	});
 
+	test("a tool burst starts the stream exactly once", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Grep", input: {} });
+		await new Promise((r) => setTimeout(r, 60));
+
+		expect(calls.postChatMessage).toHaveLength(1);
+	});
+
 	test("reaction ladder stays fully suppressed in working-text mode", async () => {
 		const { channel, calls } = makeWorkingTextChannel();
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
 		instance?.onRuntimeEvent?.({ type: "thinking" });
 		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Grep", input: {} });
 		await new Promise((r) => setTimeout(r, 600)); // past the reaction debounce
@@ -374,7 +386,8 @@ describe("working text (progressive updates)", () => {
 		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		await new Promise((r) => setTimeout(r, 60));
 		await instance?.deliverResponse?.({ text: "final answer", isError: false });
 
 		expect(calls.postToNextcloud).toEqual([{ token: "room1", text: "final answer", threadId: undefined }]);
@@ -384,12 +397,26 @@ describe("working text (progressive updates)", () => {
 		expect(folded).toBeUndefined();
 	});
 
+	test("a turn without tool activity leaves no placeholder and deletes nothing", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.deliverResponse?.({ text: "final answer", isError: false });
+
+		expect(calls.postToNextcloud).toHaveLength(1);
+		expect(calls.postChatMessage).toHaveLength(0);
+		expect(calls.editChatMessage).toHaveLength(0);
+		expect(calls.deleteChatMessage).toHaveLength(0);
+	});
+
 	test("failed delivery folds the response into the placeholder instead of deleting", async () => {
 		const { channel, calls } = makeWorkingTextChannel({ postToNextcloudResult: false });
 		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		await new Promise((r) => setTimeout(r, 60));
 		await instance?.deliverResponse?.({ text: "final answer", isError: false });
 
 		const folded = calls.editChatMessage.find((c) => c.message === "final answer");
@@ -402,7 +429,8 @@ describe("working text (progressive updates)", () => {
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		await new Promise((r) => setTimeout(r, 60));
 		instance?.dispose?.();
 		await new Promise((r) => setTimeout(r, 50));
 
@@ -414,7 +442,6 @@ describe("working text (progressive updates)", () => {
 		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
 
 		const instance = factory(makeNextcloudMessage());
-		await instance?.onTurnStart?.();
 		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
 		await new Promise((r) => setTimeout(r, 120));
 		await instance?.deliverResponse?.({ text: "final answer", isError: false });
@@ -437,8 +464,6 @@ describe("working text (progressive updates)", () => {
 		await new Promise((r) => setTimeout(r, 50));
 		const queuedCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.queued && c.add === true);
 		expect(queuedCall).toBeDefined();
-
-		await instance?.onTurnStart?.();
 		expect(calls.postChatMessage).toHaveLength(0);
 	});
 });

@@ -138,11 +138,14 @@ export function createNextcloudInteractionFactory(
 		// Working text: the placeholder lifecycle. postChatMessage is the one
 		// send path that returns a real message ID (user API), which the
 		// ProgressStream then edits and this closure deletes at delivery time.
+		// The placeholder posts lazily on the first tool activity, so short
+		// conversational turns leave no placeholder and no delete tombstone.
 		let placeholderId: number | null = null;
 		let placeholderSettled = false;
 		const settlePlaceholder = async (finalText: string | null): Promise<void> => {
-			if (placeholderId === null || placeholderSettled) return;
+			if (placeholderSettled) return;
 			placeholderSettled = true;
+			if (placeholderId === null) return;
 			if (finalText === null) {
 				await nc.deleteChatMessage(rt, placeholderId);
 			} else {
@@ -155,6 +158,12 @@ export function createNextcloudInteractionFactory(
 					adapter: {
 						postMessage: async (text) => {
 							const id = await nc.postChatMessage(rt, text, { silent: true, threadId });
+							if (placeholderSettled) {
+								// The turn settled while this lazy start was still in
+								// flight; delete the orphan instead of adopting it.
+								if (id !== null) await nc.deleteChatMessage(rt, id);
+								return "";
+							}
 							placeholderId = id;
 							return id !== null ? String(id) : "";
 						},
@@ -176,13 +185,24 @@ export function createNextcloudInteractionFactory(
 				})
 			: undefined;
 
+		// First tool activity is what makes the placeholder worth posting, so
+		// the stream starts then, not at turn start. The flag is set before
+		// the await so concurrent tool events cannot double-post; events that
+		// land while the post is in flight are queued as dirty lines and flush
+		// once the message ID exists.
+		let progressStarted = false;
+		const startProgressOnFirstActivity = async (tool: string, summary: string): Promise<void> => {
+			if (!progressStream) return;
+			if (!progressStarted) {
+				progressStarted = true;
+				await progressStream.start();
+			}
+			progressStream.addToolActivity(tool, summary);
+		};
+
 		return {
 			statusReactions,
 			progressStream,
-
-			async onTurnStart(): Promise<void> {
-				await progressStream?.start();
-			},
 
 			onRuntimeEvent(event): void {
 				switch (event.type) {
@@ -191,7 +211,7 @@ export function createNextcloudInteractionFactory(
 						break;
 					case "tool_use":
 						if (!workingText) statusReactions.setTool(event.tool);
-						progressStream?.addToolActivity(event.tool, formatToolActivity(event.tool, event.input));
+						void startProgressOnFirstActivity(event.tool, formatToolActivity(event.tool, event.input));
 						break;
 					case "error":
 						statusReactions.setError();
@@ -223,10 +243,11 @@ export function createNextcloudInteractionFactory(
 					await progressStream.finish("");
 					if (posted) {
 						await settlePlaceholder(null);
-					} else if (placeholderId !== null) {
+					} else {
 						// Delivery failed: fold the response into the placeholder so
 						// the turn still leaves content behind instead of deleting
-						// everything.
+						// everything. Unconditional so an in-flight lazy start is
+						// still marked settled and its post gets deleted.
 						await settlePlaceholder(body);
 					}
 				}
@@ -237,8 +258,10 @@ export function createNextcloudInteractionFactory(
 				unregisterInFlightMessage("nextcloud", mid);
 				statusReactions.dispose();
 				// Safety net: never leave a placeholder behind if delivery never
-				// ran (early return, throw in the orchestration, etc.)
-				if (progressStream && placeholderId !== null) {
+				// ran (early return, throw in the orchestration, etc.). Marking
+				// settled even with no placeholder also orphans an in-flight
+				// lazy start into deleting its own post.
+				if (progressStream) {
 					void settlePlaceholder(null).catch(() => {});
 				}
 			},

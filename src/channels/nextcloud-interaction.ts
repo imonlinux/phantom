@@ -10,25 +10,40 @@
  *   (Talk renders every reaction change as a chat system message, so a
  *   successful turn clears the reaction instead of parking a ✅ on the
  *   message; see issue #1)
+ * - Working text (progressive updates): a transient placeholder posted via
+ *   the service-account USER chat API, edited with tool activity while the
+ *   turn runs, and deleted once the bot response is delivered. The Bot API
+ *   itself still carries no message ID and has no edit endpoint, so the
+ *   placeholder must come from the service account (Talk 20+ user API:
+ *   edit-messages/delete-messages). While working text is active the emoji
+ *   ladder is suppressed — the placeholder carries the state, and Talk
+ *   renders every bot reaction change as a "Deleted user" system message.
+ *   Errors keep the ⚠ reaction so failed turns stay identifiable.
  * - Feedback mechanism: "Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)"
  * - Thread awareness: responses follow the conversation's Talk thread when
  *   the session is thread-scoped (Talk 24+)
  *
  * Nextcloud limitations (vs Telegram):
  * - No inline keyboards → use reaction-based feedback instead
- * - Bot POST responses carry no message ID and no edit endpoint exists →
- *   progressive updates are impossible; each update would be a new message
- * - No typing indicators → status reactions serve as activity indicator
+ * - No typing indicators: typing state only travels over Talk's signaling
+ *   websocket, which has no REST surface the service account could use
  *
  * Configuration options (from NextcloudChannelConfig):
  * - enableFeedback: Enable feedback collection via reactions (default: true)
+ * - enableProgressiveUpdates: Enable working text (requires service account)
+ * - progressiveUpdateThrottleMs: Minimum interval between placeholder edits
  */
 
 import type { ChannelInteractionFactory, ChannelInteractionInstance } from "./interaction-adapter.ts";
-import type { NextcloudChannel } from "./nextcloud.ts";
-import type { InboundMessage } from "./types.ts";
-import { createStatusReactionController, type StatusEmojis, type StatusReactionController } from "./status-reactions.ts";
 import { registerInFlightMessage, unregisterInFlightMessage } from "./interrupt.ts";
+import type { NextcloudChannel } from "./nextcloud.ts";
+import { type ProgressStream, createProgressStream, formatToolActivity } from "./progress-stream.ts";
+import {
+	type StatusEmojis,
+	type StatusReactionController,
+	createStatusReactionController,
+} from "./status-reactions.ts";
+import type { InboundMessage } from "./types.ts";
 
 // Phase 1: Enhanced emoji map for Nextcloud (matches Slack defaults)
 export const NEXTCLOUD_EMOJIS: StatusEmojis = {
@@ -54,6 +69,8 @@ export function createNextcloudInteractionFactory(
 	nextcloudChannel: NextcloudChannel | null,
 	config?: {
 		enableFeedback?: boolean;
+		enableProgressiveUpdates?: boolean;
+		progressiveUpdateThrottleMs?: number;
 	},
 ): ChannelInteractionFactory {
 	return (msg: InboundMessage): ChannelInteractionInstance | null => {
@@ -74,7 +91,10 @@ export function createNextcloudInteractionFactory(
 		const rt = roomToken;
 		const mid = messageId;
 
-		// Phase 1: Status reactions (always enabled)
+		// Working text needs the user chat API, which needs the service
+		// account. Without it, fall back to the reaction ladder.
+		const workingText = Boolean(config?.enableProgressiveUpdates) && nc.hasServiceAccount();
+
 		const inner = createStatusReactionController({
 			adapter: {
 				addReaction: async (emoji) => {
@@ -99,7 +119,9 @@ export function createNextcloudInteractionFactory(
 			...inner,
 			setDone: () => inner.clear(),
 		};
-		statusReactions.setQueued();
+		// With working text the placeholder is the progress signal; the
+		// queued reaction would only add a system message next to it.
+		if (!workingText) statusReactions.setQueued();
 
 		// Anchor this turn's in-flight message so a stop-emoji reaction on it
 		// can be resolved back to the conversation (agent interrupt). The
@@ -111,20 +133,65 @@ export function createNextcloudInteractionFactory(
 
 		// Thread-scoped sessions (Talk 24+) post responses back into the Talk
 		// thread; undefined threadId keeps the plain room-level behavior.
-		const deliverText = async (text: string): Promise<void> => {
-			await nc.postToNextcloud(rt, text, undefined, threadId);
+		const deliverText = async (text: string): Promise<boolean> => nc.postToNextcloud(rt, text, undefined, threadId);
+
+		// Working text: the placeholder lifecycle. postChatMessage is the one
+		// send path that returns a real message ID (user API), which the
+		// ProgressStream then edits and this closure deletes at delivery time.
+		let placeholderId: number | null = null;
+		let placeholderSettled = false;
+		const settlePlaceholder = async (finalText: string | null): Promise<void> => {
+			if (placeholderId === null || placeholderSettled) return;
+			placeholderSettled = true;
+			if (finalText === null) {
+				await nc.deleteChatMessage(rt, placeholderId);
+			} else {
+				await nc.editChatMessage(rt, placeholderId, finalText);
+			}
 		};
+
+		const progressStream: ProgressStream | undefined = workingText
+			? createProgressStream({
+					adapter: {
+						postMessage: async (text) => {
+							const id = await nc.postChatMessage(rt, text, { silent: true, threadId });
+							placeholderId = id;
+							return id !== null ? String(id) : "";
+						},
+						updateMessage: async (msgId, updatedText) => {
+							const numericId = Number(msgId);
+							if (Number.isNaN(numericId)) return;
+							await nc.editChatMessage(rt, numericId, updatedText);
+						},
+					},
+					// finish() only stops the throttle timer here; delivery settles
+					// the placeholder itself (delete on success, fold-over on failure)
+					onFinish: async () => {},
+					header: "⏳ Working on it...",
+					throttleMs: config?.progressiveUpdateThrottleMs,
+					onError: (err) => {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						console.warn(`[nextcloud] Working text error: ${errMsg}`);
+					},
+				})
+			: undefined;
 
 		return {
 			statusReactions,
+			progressStream,
+
+			async onTurnStart(): Promise<void> {
+				await progressStream?.start();
+			},
 
 			onRuntimeEvent(event): void {
 				switch (event.type) {
 					case "thinking":
-						statusReactions.setThinking();
+						if (!workingText) statusReactions.setThinking();
 						break;
 					case "tool_use":
-						statusReactions.setTool(event.tool);
+						if (!workingText) statusReactions.setTool(event.tool);
+						progressStream?.addToolActivity(event.tool, formatToolActivity(event.tool, event.input));
 						break;
 					case "error":
 						statusReactions.setError();
@@ -133,8 +200,8 @@ export function createNextcloudInteractionFactory(
 			},
 
 			async onTurnEnd(): Promise<void> {
-				// Nextcloud doesn't have typing indicators like Telegram
-				// Status reactions serve as the activity indicator
+				// Placeholder settling happens in deliverResponse, after the
+				// response has actually been posted (or failed to post)
 			},
 
 			async deliverResponse({ text, attachments }): Promise<boolean> {
@@ -146,11 +213,22 @@ export function createNextcloudInteractionFactory(
 					fullText += await nc.uploadTalkAttachments(rt, attachments);
 				}
 				const enableFeedback = config?.enableFeedback !== false;
-				if (enableFeedback) {
-					const feedbackPrompt = "\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)";
-					await deliverText(fullText + feedbackPrompt);
-				} else {
-					await deliverText(fullText);
+				const body = enableFeedback
+					? `${fullText}\n\n💡 Was this helpful? React with 👍, ❤️, or ✅ (yes) or 👎/❌ (no)`
+					: fullText;
+				const posted = await deliverText(body);
+
+				if (progressStream) {
+					// Stop any pending throttle flush before settling
+					await progressStream.finish("");
+					if (posted) {
+						await settlePlaceholder(null);
+					} else if (placeholderId !== null) {
+						// Delivery failed: fold the response into the placeholder so
+						// the turn still leaves content behind instead of deleting
+						// everything.
+						await settlePlaceholder(body);
+					}
 				}
 				return true;
 			},
@@ -158,6 +236,11 @@ export function createNextcloudInteractionFactory(
 			dispose(): void {
 				unregisterInFlightMessage("nextcloud", mid);
 				statusReactions.dispose();
+				// Safety net: never leave a placeholder behind if delivery never
+				// ran (early return, throw in the orchestration, etc.)
+				if (progressStream && placeholderId !== null) {
+					void settlePlaceholder(null).catch(() => {});
+				}
 			},
 		};
 	};

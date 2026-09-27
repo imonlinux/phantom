@@ -162,12 +162,14 @@ channels:
 - `owner_user_id` - **NEW**: Only respond to this Nextcloud user ID (env: `NEXTCLOUD_OWNER_USER_ID`, optional)
 - `send_intro` - **NEW**: Send welcome message on first startup (env: `NEXTCLOUD_SEND_INTRO`, default: `false`)
 - `enable_feedback` - **NEW**: Collect feedback via reactions (env: `NEXTCLOUD_ENABLE_FEEDBACK`, default: `true`)
+- `enable_progressive_updates` - **NEW**: Working text - a transient "Working on it..." placeholder that updates with tool activity and disappears when the response arrives (env: `NEXTCLOUD_PROGRESSIVE_UPDATES`, default: off). Requires the service account (`phantom_id`/`phantom_app_pass`); see [Progressive Updates](#progressive-updates).
+- `progressive_update_throttle_ms` - Minimum interval between placeholder edits (env: `NEXTCLOUD_PROGRESSIVE_UPDATE_THROTTLE_MS`, default: `1000`)
 - `enable_threads` - **NEW** (Talk 24+): Scope sessions to the Talk thread a message belongs to and post responses back into that thread (env: `NEXTCLOUD_ENABLE_THREADS`, default: `true`). The bot joins existing threads; it never creates them.
 - `interrupt_reaction` - **NEW**: Reaction that cancels the running turn when applied to the in-flight message (default: `🛑`). Owner-only; see [Agent Interrupt](#agent-interrupt-stop-reaction).
 - `phantom_id` - WebDAV service account user id (env: `NEXTCLOUD_PHANTOM_ID`, optional). Must be a participant in the room; see Step 3.
 - `phantom_app_pass` - App password for the service account (env: `NEXTCLOUD_PHANTOM_APP_PASS`, optional). Required together with `phantom_id` for file sharing in both directions.
 
-**Deprecated keys:** `enable_progressive_updates` and `progressive_update_throttle_ms` are accepted but ignored. Bot messages cannot be edited: the Bot API's POST response carries no message ID and no edit endpoint exists in any Talk release. Existing configs that set these keys still validate.
+**Note:** the Bot API's POST response carries no message ID and no bot edit endpoint exists in any Talk release. Working text therefore rides the *user* chat API on the WebDAV service account instead; without `phantom_id`/`phantom_app_pass` the keys validate but stay inactive (reaction ladder is used).
 
 ## Step 5: Restart Phantom
 
@@ -226,21 +228,27 @@ Phantom uses emoji reactions to show activity state while processing messages (m
 
 These reactions provide real-time feedback without cluttering the chat with status messages.
 
-### Progressive Updates
+### Progressive Updates (Working Text)
 
-**⚠️ Not Available for Nextcloud Talk**
+**✅ Available with the WebDAV service account (Talk 20+, `edit-messages` capability)**
 
-Progressive updates (showing "Working on it..." with real-time tool activity) are not supported for Nextcloud Talk due to API limitations. The Nextcloud Bot API's `postToNextcloud()` method returns a boolean success/failure status rather than the message ID, which prevents us from editing the message later with tool activity updates.
+Set `enable_progressive_updates: true` (env: `NEXTCLOUD_PROGRESSIVE_UPDATES`) and Phantom posts a silent "⏳ Working on it..." placeholder through the service account's **user** chat API when a turn starts, edits it with tool activity lines while the turn runs, and deletes it once the bot response is delivered - a successful turn leaves no residue in the room.
 
-**What works instead:**
-- Status reactions (👀 queued → 🧠 thinking → 🔧 tool → ✅ done) provide real-time feedback
-- Final response is delivered when complete
-- Feedback collection via reactions still works
+**Why the user API:** the Bot API's send response carries no message ID and no edit endpoint exists for bots (verified against upstream master). The user chat API (`POST /chat/{token}`) returns the message ID, and `PUT`/`DELETE /chat/{token}/message/{id}` (Talk 20+ `edit-messages`/`delete-messages`) work for the author. The service account added for WebDAV file sharing is already a room participant, so it can post the placeholder. The final answer still comes from the bot.
+
+**Behavior details:**
+- Placeholder edits are throttled by `progressive_update_throttle_ms` (default 1000ms)
+- While working text is active, the emoji reaction ladder (👀/🧠/🔧) is suppressed - the placeholder carries the state, and Talk renders every bot reaction change as a "Deleted user" system message
+- Errors still apply the ⚠ reaction to your message; the placeholder is deleted after the error response posts
+- If the bot response post fails, the response text is folded into the placeholder instead of deleted, so the turn still leaves content behind
+- Placeholder posts/edits/deletes echo back to the webhook as service-account hooks; the ingest gate drops them before the owner check (this is also why the service account must never equal the owner user)
+
+**Without the service account or with the key off:** status reactions (👀 queued → 🧠 thinking → 🔧 tool, cleared on done, ⚠ on error) provide the activity feedback, as before.
 
 **Comparison with other channels:**
 - Slack: ✅ Progressive updates supported (message editing available)
 - Telegram: ✅ Progressive updates supported (message editing available)
-- Nextcloud: ❌ Progressive updates not supported (API limitation)
+- Nextcloud: ✅ Progressive updates supported via the service-account user API (Bot API itself remains edit-less)
 
 ### Threads (Talk 24+)
 

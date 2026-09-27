@@ -33,8 +33,14 @@ export function createProgressStream(params: {
 	onError?: (err: unknown) => void;
 	/** Custom finish handler that receives messageId, text, blocks */
 	onFinish?: (messageId: string, text: string, blocks?: unknown[]) => Promise<void>;
+	/** Header line shown while working (default "Working on it...") */
+	header?: string;
+	/** Minimum interval between update flushes (default 1000ms) */
+	throttleMs?: number;
 }): ProgressStream {
 	const { adapter, onError, onFinish } = params;
+	const header = params.header ?? "Working on it...";
+	const throttleMs = params.throttleMs ?? THROTTLE_MS;
 
 	let messageId: string | null = null;
 	const lines: ProgressLine[] = [];
@@ -43,10 +49,9 @@ export function createProgressStream(params: {
 	let stopped = false;
 
 	function formatProgress(): string {
-		if (lines.length === 0) return "Working on it...";
+		if (lines.length === 0) return header;
 
 		const visible = lines.slice(-MAX_LINES);
-		const header = "Working on it...";
 		const activity = visible.map((l) => `> ${l.summary}`).join("\n");
 		return `${header}\n${activity}`;
 	}
@@ -66,13 +71,13 @@ export function createProgressStream(params: {
 		timer = setTimeout(() => {
 			timer = null;
 			void flush();
-		}, THROTTLE_MS);
+		}, throttleMs);
 	}
 
 	return {
 		async start(): Promise<void> {
 			try {
-				messageId = await adapter.postMessage("Working on it...");
+				messageId = await adapter.postMessage(header);
 			} catch (err) {
 				onError?.(err);
 			}

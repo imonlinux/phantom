@@ -164,10 +164,14 @@ export const NextcloudChannelConfigSchema = z
 		// Matches Nextcloud user ID (from webhook payload actor.id field)
 		// When omitted, bot responds to everyone (backward compatible)
 		owner_user_id: z.string().optional(),
-		// DEPRECATED, ignored: no bot message-edit endpoint exists in any Talk
-		// release (bot POST responses carry no message ID). Keys are kept so
-		// existing deployments' channels.yaml still pass .strict() validation.
+		// Working text (progressive updates): a transient placeholder is
+		// posted via the service-account USER chat API, edited with tool
+		// activity while the turn runs, and deleted once the response is
+		// delivered. The Bot API still cannot edit messages; this requires
+		// phantom_id/phantom_app_pass and the edit-messages capability
+		// (Talk 20+). While active the emoji reaction ladder is suppressed.
 		enable_progressive_updates: z.boolean().optional(),
+		// Minimum interval between placeholder edits (default 1000ms)
 		progressive_update_throttle_ms: z.number().int().min(500).max(10000).optional(),
 		// Enable feedback collection via reaction prompts (👍/👎)
 		enable_feedback: z.boolean().default(true),

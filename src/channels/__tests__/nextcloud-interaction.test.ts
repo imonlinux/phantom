@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createNextcloudInteractionFactory, NEXTCLOUD_EMOJIS } from "../nextcloud-interaction.ts";
+import { NEXTCLOUD_EMOJIS, createNextcloudInteractionFactory } from "../nextcloud-interaction.ts";
 import type { InboundMessage } from "../types.ts";
 
 function makeMockNextcloudChannel() {
@@ -228,5 +228,217 @@ describe("createNextcloudInteractionFactory", () => {
 		expect(doneAdd).toBeUndefined();
 		const thinkingRemove = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.thinking && c.add === false);
 		expect(thinkingRemove).toBeDefined();
+	});
+});
+
+// Mock channel extended with the service-account user chat API surface that
+// working text rides on (postChatMessage / editChatMessage / deleteChatMessage).
+function makeWorkingTextChannel(options?: {
+	hasServiceAccount?: boolean;
+	postToNextcloudResult?: boolean;
+	postChatMessageResult?: number | null;
+}) {
+	const calls = {
+		setReaction: [] as Array<{ token: string; messageId: number; emoji: string; add: boolean }>,
+		postToNextcloud: [] as Array<{ token: string; text: string; threadId?: number }>,
+		postChatMessage: [] as Array<{
+			token: string;
+			message: string;
+			opts?: { silent?: boolean; threadId?: number };
+		}>,
+		editChatMessage: [] as Array<{ token: string; messageId: number; message: string }>,
+		deleteChatMessage: [] as Array<{ token: string; messageId: number }>,
+	};
+	let nextPlaceholderId = 1000;
+
+	const channel = {
+		setReaction: mock(async (token: string, messageId: number, emoji: string, add: boolean) => {
+			calls.setReaction.push({ token, messageId, emoji, add });
+		}),
+		postToNextcloud: mock(async (token: string, text: string, _opts?: unknown, threadId?: number) => {
+			calls.postToNextcloud.push({ token, text, threadId });
+			return options?.postToNextcloudResult ?? true;
+		}),
+		hasServiceAccount: mock(() => options?.hasServiceAccount ?? true),
+		postChatMessage: mock(async (token: string, message: string, opts?: { silent?: boolean; threadId?: number }) => {
+			calls.postChatMessage.push({ token, message, opts });
+			if (options?.postChatMessageResult !== undefined) return options.postChatMessageResult;
+			return ++nextPlaceholderId;
+		}),
+		editChatMessage: mock(async (token: string, messageId: number, message: string) => {
+			calls.editChatMessage.push({ token, messageId, message });
+			return true;
+		}),
+		deleteChatMessage: mock(async (token: string, messageId: number) => {
+			calls.deleteChatMessage.push({ token, messageId });
+			return true;
+		}),
+	};
+	return {
+		channel: channel as unknown as Parameters<typeof createNextcloudInteractionFactory>[0],
+		calls,
+	};
+}
+
+function makeWorkingTextFactory(
+	channel: Parameters<typeof createNextcloudInteractionFactory>[0],
+	config?: { enableFeedback?: boolean; progressiveUpdateThrottleMs?: number },
+) {
+	return createNextcloudInteractionFactory(channel, {
+		enableProgressiveUpdates: true,
+		progressiveUpdateThrottleMs: 20,
+		...config,
+	});
+}
+
+describe("working text (progressive updates)", () => {
+	test("suppression: no queued reaction and no placeholder until onTurnStart", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		expect(instance?.progressStream).toBeDefined();
+		await new Promise((r) => setTimeout(r, 50));
+		expect(calls.setReaction).toHaveLength(0);
+		expect(calls.postChatMessage).toHaveLength(0);
+	});
+
+	test("onTurnStart posts a silent placeholder with the working-text header", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+
+		expect(calls.postChatMessage).toHaveLength(1);
+		const call = calls.postChatMessage[0];
+		expect(call.token).toBe("room1");
+		expect(call.message).toBe("⏳ Working on it...");
+		expect(call.opts?.silent).toBe(true);
+	});
+
+	test("thread-scoped messages post the placeholder into the Talk thread", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage({ nextcloudThreadId: 77 }));
+		await instance?.onTurnStart?.();
+
+		expect(calls.postChatMessage[0].opts?.threadId).toBe(77);
+	});
+
+	test("tool activity edits the placeholder through the throttled stream", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: { file_path: "/src/main.ts" } });
+		await new Promise((r) => setTimeout(r, 120));
+
+		expect(calls.editChatMessage).toHaveLength(1);
+		const edit = calls.editChatMessage[0];
+		expect(edit.token).toBe("room1");
+		expect(edit.messageId).toBe(1001);
+		expect(edit.message).toContain("⏳ Working on it...");
+		expect(edit.message).toContain("Reading /src/main.ts");
+	});
+
+	test("reaction ladder stays fully suppressed in working-text mode", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "thinking" });
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Grep", input: {} });
+		await new Promise((r) => setTimeout(r, 600)); // past the reaction debounce
+
+		expect(calls.setReaction).toHaveLength(0);
+	});
+
+	test("error events still raise the ⚠ reaction in working-text mode", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		instance?.onRuntimeEvent?.({ type: "error", message: "boom" });
+		await new Promise((r) => setTimeout(r, 700)); // error debounce 500ms
+
+		const errCall = calls.setReaction.find((c) => c.emoji === "\u26A0" && c.add === true);
+		expect(errCall).toBeDefined();
+	});
+
+	test("successful delivery deletes the placeholder after posting the response", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		await instance?.deliverResponse?.({ text: "final answer", isError: false });
+
+		expect(calls.postToNextcloud).toEqual([{ token: "room1", text: "final answer", threadId: undefined }]);
+		expect(calls.deleteChatMessage).toEqual([{ token: "room1", messageId: 1001 }]);
+		// The placeholder must never be edited with the final body
+		const folded = calls.editChatMessage.find((c) => c.message.includes("final answer"));
+		expect(folded).toBeUndefined();
+	});
+
+	test("failed delivery folds the response into the placeholder instead of deleting", async () => {
+		const { channel, calls } = makeWorkingTextChannel({ postToNextcloudResult: false });
+		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		await instance?.deliverResponse?.({ text: "final answer", isError: false });
+
+		const folded = calls.editChatMessage.find((c) => c.message === "final answer");
+		expect(folded).toBeDefined();
+		expect(calls.deleteChatMessage).toHaveLength(0);
+	});
+
+	test("dispose deletes a placeholder that was never settled", async () => {
+		const { channel, calls } = makeWorkingTextChannel();
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		instance?.dispose?.();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(calls.deleteChatMessage).toHaveLength(1);
+	});
+
+	test("placeholder post failure degrades to a no-op lifecycle", async () => {
+		const { channel, calls } = makeWorkingTextChannel({ postChatMessageResult: null });
+		const factory = makeWorkingTextFactory(channel, { enableFeedback: false });
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.onTurnStart?.();
+		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Read", input: {} });
+		await new Promise((r) => setTimeout(r, 120));
+		await instance?.deliverResponse?.({ text: "final answer", isError: false });
+		instance?.dispose?.();
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Response still delivers, but there is nothing to edit or delete
+		expect(calls.postToNextcloud).toHaveLength(1);
+		expect(calls.editChatMessage).toHaveLength(0);
+		expect(calls.deleteChatMessage).toHaveLength(0);
+	});
+
+	test("falls back to the reaction ladder without a service account", async () => {
+		const { channel, calls } = makeWorkingTextChannel({ hasServiceAccount: false });
+		const factory = makeWorkingTextFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		expect(instance?.progressStream).toBeUndefined();
+
+		await new Promise((r) => setTimeout(r, 50));
+		const queuedCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.queued && c.add === true);
+		expect(queuedCall).toBeDefined();
+
+		await instance?.onTurnStart?.();
+		expect(calls.postChatMessage).toHaveLength(0);
 	});
 });

@@ -566,9 +566,13 @@ async function main(): Promise<void> {
 	const interactionRegistry = new ChannelInteractionRegistry();
 	interactionRegistry.register(createSlackInteractionFactory(slackChannel));
 	// Phase 2: Pass Nextcloud configuration to interaction factory
+	const nextcloudConfig = channelsConfig?.nextcloud;
 	interactionRegistry.register(
 		createNextcloudInteractionFactory(nextcloudChannel, {
-			enableFeedback: channelsConfig.nextcloud?.enable_feedback,
+			enableFeedback: nextcloudConfig?.enable_feedback,
+			// Working text: placeholder + edits via the service-account user API
+			enableProgressiveUpdates: nextcloudConfig?.enable_progressive_updates,
+			progressiveUpdateThrottleMs: nextcloudConfig?.progressive_update_throttle_ms,
 		}),
 	);
 	interactionRegistry.register(createTelegramInteractionFactory(telegramChannel));

@@ -161,4 +161,40 @@ describe("createProgressStream", () => {
 		// Only the finish call should have happened
 		expect(updateMessage).toHaveBeenCalledTimes(1);
 	});
+
+	test("uses a custom header instead of the default", async () => {
+		const postMessage = mock(async (_text: string) => "msg_123");
+		const updateMessage = mock(async (_id: string, _text: string) => {});
+
+		const stream = createProgressStream({
+			adapter: { postMessage, updateMessage },
+			header: "⏳ Working on it...",
+		});
+
+		await stream.start();
+		expect(postMessage).toHaveBeenCalledWith("⏳ Working on it...");
+
+		stream.addToolActivity("Read", "Reading /src/main.ts");
+		await new Promise((r) => setTimeout(r, 1100));
+		const rendered = updateMessage.mock.calls[0][1] as string;
+		expect(rendered.startsWith("⏳ Working on it...")).toBe(true);
+	});
+
+	test("respects a custom throttle interval", async () => {
+		const postMessage = mock(async (_text: string) => "msg_123");
+		const updateMessage = mock(async (_id: string, _text: string) => {});
+
+		const stream = createProgressStream({
+			adapter: { postMessage, updateMessage },
+			throttleMs: 20,
+		});
+
+		await stream.start();
+		stream.addToolActivity("Read", "Reading /src/main.ts");
+
+		// Custom throttle (20ms) instead of the 1000ms default
+		expect(updateMessage).not.toHaveBeenCalled();
+		await new Promise((r) => setTimeout(r, 150));
+		expect(updateMessage).toHaveBeenCalledTimes(1);
+	});
 });

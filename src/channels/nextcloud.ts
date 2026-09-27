@@ -691,11 +691,16 @@ export class NextcloudChannel implements Channel {
 			console.log(`[nextcloud] Ignoring message from self (botId=${actorId})`);
 			return { status: 200, error: undefined };
 		}
-		// Ignore file shares created by our own service account: outbound
-		// deliveries into the conversation folder echo back as file_shared
-		// system messages, and without this gate they would loop.
-		if (isFileShare && this.config.phantomId && actorId === `users/${this.config.phantomId}`) {
-			console.log(`[nextcloud] Ignoring file share from service account (${actorId})`);
+		// Ignore everything from our own service account. Outbound WebDAV
+		// deliveries echo back as file_shared system messages, and working
+		// text placeholders (posted via the user chat API) arrive as Create
+		// hooks with edit/delete echoes behind them. Without this gate the
+		// placeholder would hit the owner rejection path below and the bot
+		// would answer its own progress message.
+		if (this.config.phantomId && actorId === `users/${this.config.phantomId}`) {
+			if (isFileShare) {
+				console.log(`[nextcloud] Ignoring file share from service account (${actorId})`);
+			}
 			return { status: 200, error: undefined };
 		}
 
@@ -1113,6 +1118,153 @@ export class NextcloudChannel implements Channel {
 		}
 
 		return false;
+	}
+
+	// ── Service-account user chat API ─────────────────────────────────────
+	// The Bot API can neither report the message ID of what it posts nor
+	// edit messages, so working text (progressive updates) rides the user
+	// chat API on the service account instead. The account is already a
+	// room participant for Talk 24 file shares; edit-messages/delete-messages
+	// capabilities (Talk 20+) do the rest. Every method degrades to a no-op
+	// when the service account is not configured.
+
+	hasServiceAccount(): boolean {
+		return Boolean(this.config.phantomId && this.config.phantomAppPass);
+	}
+
+	private serviceAccountHeader(): string | null {
+		if (!this.config.phantomId || !this.config.phantomAppPass) return null;
+		return `Basic ${Buffer.from(`${this.config.phantomId}:${this.config.phantomAppPass}`).toString("base64")}`;
+	}
+
+	private apiUrl(path: string): string {
+		let talkServer = this.config.talkServer.trim();
+		if (talkServer.startsWith("http://")) {
+			talkServer = talkServer.slice(7);
+		} else if (talkServer.startsWith("https://")) {
+			talkServer = talkServer.slice(8);
+		}
+		if (talkServer.endsWith("/")) {
+			talkServer = talkServer.slice(0, -1);
+		}
+		return `https://${talkServer}/ocs/v2.php/apps/spreed/api/v1${path}`;
+	}
+
+	/**
+	 * Post a chat message as the service account via the user API.
+	 * Unlike the Bot API, this response carries the message ID, which is
+	 * what makes edit/delete (and therefore working text) possible.
+	 * Returns the Talk message ID, or null when the service account is
+	 * missing or the post failed.
+	 */
+	async postChatMessage(
+		roomToken: string,
+		message: string,
+		opts?: { silent?: boolean; threadId?: number },
+	): Promise<number | null> {
+		const auth = this.serviceAccountHeader();
+		if (!auth) return null;
+
+		const payload: Record<string, unknown> = { message };
+		if (opts?.silent) payload.silent = true;
+		if (opts?.threadId !== undefined) payload.threadId = opts.threadId;
+
+		const maxRetries = 2;
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			try {
+				const res = await fetch(this.apiUrl(`/chat/${encodeURIComponent(roomToken)}`), {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"OCS-APIRequest": "true",
+						Accept: "application/json",
+						Authorization: auth,
+					},
+					body: JSON.stringify(payload),
+				});
+				if (res.ok) {
+					const data = (await res.json()) as { ocs?: { data?: { id?: number | string } } };
+					const id = Number.parseInt(String(data?.ocs?.data?.id ?? ""), 10);
+					return !isNaN(id) ? id : null;
+				}
+				if ((res.status === 429 || res.status >= 500) && attempt < maxRetries - 1) {
+					const retryAfter = res.headers.get("Retry-After");
+					const delayMs = retryAfter
+						? Number.parseInt(retryAfter, 10) * 1000
+						: 1000 * Math.pow(2, attempt) * (0.5 + Math.random());
+					await this.sleep(delayMs);
+					continue;
+				}
+				const text = await res.text();
+				console.error(`[nextcloud] Chat API post error: ${res.status} – ${text.slice(0, 200)}`);
+				return null;
+			} catch (err) {
+				if (attempt < maxRetries - 1) {
+					await this.sleep(1000 * Math.pow(2, attempt) * (0.5 + Math.random()));
+					continue;
+				}
+				console.error("[nextcloud] Chat API post failed:", err instanceof Error ? err.message : err);
+				return null;
+			}
+		}
+		return null;
+	}
+
+	/** Edit a service-account chat message. Returns false on failure. */
+	async editChatMessage(roomToken: string, messageId: number, message: string): Promise<boolean> {
+		const auth = this.serviceAccountHeader();
+		if (!auth) return false;
+
+		try {
+			const res = await fetch(
+				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/message/${encodeURIComponent(String(messageId))}`),
+				{
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						"OCS-APIRequest": "true",
+						Accept: "application/json",
+						Authorization: auth,
+					},
+					body: JSON.stringify({ message }),
+				},
+			);
+			if (res.ok) return true;
+			const text = await res.text();
+			console.error(`[nextcloud] Chat API edit error: ${res.status} – ${text.slice(0, 200)}`);
+			return false;
+		} catch (err) {
+			console.error("[nextcloud] Chat API edit failed:", err instanceof Error ? err.message : err);
+			return false;
+		}
+	}
+
+	/** Delete a service-account chat message. A missing message counts as deleted. */
+	async deleteChatMessage(roomToken: string, messageId: number): Promise<boolean> {
+		const auth = this.serviceAccountHeader();
+		if (!auth) return false;
+
+		try {
+			const res = await fetch(
+				this.apiUrl(`/chat/${encodeURIComponent(roomToken)}/message/${encodeURIComponent(String(messageId))}`),
+				{
+					method: "DELETE",
+					headers: {
+						"OCS-APIRequest": "true",
+						Accept: "application/json",
+						Authorization: auth,
+					},
+				},
+			);
+			// 404: already gone (e.g. the placeholder was deleted by hand)
+			if (res.ok || res.status === 404) return true;
+			const text = await res.text();
+			console.error(`[nextcloud] Chat API delete error: ${res.status} – ${text.slice(0, 200)}`);
+			return false;
+		} catch (err) {
+			console.error("[nextcloud] Chat API delete failed:", err instanceof Error ? err.message : err);
+			return false;
+		}
 	}
 
 	private parseConversationId(conversationId: string): string | null {

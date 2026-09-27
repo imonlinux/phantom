@@ -119,9 +119,10 @@ export function createNextcloudInteractionFactory(
 			...inner,
 			setDone: () => inner.clear(),
 		};
-		// With working text the placeholder is the progress signal; the
-		// queued reaction would only add a system message next to it.
-		if (!workingText) statusReactions.setQueued();
+		// The reaction ladder runs in both modes: the emoji on the owner's
+		// message is the glanceable state, the working-text placeholder (tool
+		// turns only) is the detailed activity log.
+		statusReactions.setQueued();
 
 		// Anchor this turn's in-flight message so a stop-emoji reaction on it
 		// can be resolved back to the conversation (agent interrupt). The
@@ -207,10 +208,10 @@ export function createNextcloudInteractionFactory(
 			onRuntimeEvent(event): void {
 				switch (event.type) {
 					case "thinking":
-						if (!workingText) statusReactions.setThinking();
+						statusReactions.setThinking();
 						break;
 					case "tool_use":
-						if (!workingText) statusReactions.setTool(event.tool);
+						statusReactions.setTool(event.tool);
 						void startProgressOnFirstActivity(event.tool, formatToolActivity(event.tool, event.input));
 						break;
 					case "error":

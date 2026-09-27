@@ -292,14 +292,15 @@ function makeWorkingTextFactory(
 }
 
 describe("working text (progressive updates)", () => {
-	test("suppression: no queued reaction and no placeholder before the first tool activity", async () => {
+	test("no placeholder before the first tool activity, queued reaction on arrival", async () => {
 		const { channel, calls } = makeWorkingTextChannel();
 		const factory = makeWorkingTextFactory(channel);
 
 		const instance = factory(makeNextcloudMessage());
 		expect(instance?.progressStream).toBeDefined();
 		await new Promise((r) => setTimeout(r, 50));
-		expect(calls.setReaction).toHaveLength(0);
+		const queuedCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.queued && c.add === true);
+		expect(queuedCall).toBeDefined();
 		expect(calls.postChatMessage).toHaveLength(0);
 	});
 
@@ -357,7 +358,7 @@ describe("working text (progressive updates)", () => {
 		expect(calls.postChatMessage).toHaveLength(1);
 	});
 
-	test("reaction ladder stays fully suppressed in working-text mode", async () => {
+	test("reaction ladder runs alongside the placeholder in working-text mode", async () => {
 		const { channel, calls } = makeWorkingTextChannel();
 		const factory = makeWorkingTextFactory(channel);
 
@@ -366,7 +367,12 @@ describe("working text (progressive updates)", () => {
 		instance?.onRuntimeEvent?.({ type: "tool_use", tool: "Grep", input: {} });
 		await new Promise((r) => setTimeout(r, 600)); // past the reaction debounce
 
-		expect(calls.setReaction).toHaveLength(0);
+		// The debounce coalesces queued/thinking/tool fired in a burst into
+		// the final state; Grep maps to coding via resolveToolEmoji
+		const toolCall = calls.setReaction.find((c) => c.emoji === NEXTCLOUD_EMOJIS.coding && c.add === true);
+		expect(toolCall).toBeDefined();
+		// The placeholder still posted with the tool activity
+		expect(calls.postChatMessage).toHaveLength(1);
 	});
 
 	test("error events still raise the ⚠ reaction in working-text mode", async () => {

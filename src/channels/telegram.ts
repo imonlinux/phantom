@@ -12,7 +12,14 @@
 
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, PendingAttachment, SentMessage } from "./types.ts";
 import { attachmentFailureNote, readAttachmentBuffer } from "./attachments.ts";
-import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
+import {
+	buildFeedbackContext,
+	buildFeedbackInlineKeyboard,
+	emitFeedback,
+	FEEDBACK_CONTEXT_MAX_AGE_MS,
+	type FeedbackContext,
+	parseFeedbackAction,
+} from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
 import { formatQuotedBlock } from "./quote.ts";
@@ -244,6 +251,11 @@ export class TelegramChannel implements Channel {
 	// Same pattern as NextCloud's nonce cache.
 	private updateCache: Map<number, UpdateCacheEntry> = new Map();
 	private updateCachePruneTimer: ReturnType<typeof setInterval> | null = null;
+
+	// Most recent exchange per conversation, snapshotted so reaction/button
+	// feedback carries the content it judged. Pruned on write; entries expire
+	// after FEEDBACK_CONTEXT_MAX_AGE_MS (see feedback.ts).
+	private lastExchanges = new Map<string, { user?: string; response?: string; responseAt: number }>();
 
 	// Connection supervision (interim fix; Phase 8 webhook mode is the real
 	// solution). Long-polling can silently drop without Telegraf surfacing the
@@ -969,6 +981,7 @@ export class TelegramChannel implements Channel {
 		const result = await this.bot.telegram.sendMessage(chatId, text, {
 			parse_mode: "MarkdownV2",
 		});
+		this.noteFeedbackResponse(conversationId, message.text);
 
 		if (message.attachments && message.attachments.length > 0) {
 			const failed = await this.sendAttachments(chatId, message.attachments);
@@ -1418,6 +1431,38 @@ export class TelegramChannel implements Channel {
 	}
 
 	/**
+	 * Record the user side of the current exchange so a later reaction on
+	 * the response can be correlated with what was asked.
+	 */
+	private noteFeedbackUser(conversationId: string, text: string): void {
+		this.pruneLastExchanges();
+		const entry = this.lastExchanges.get(conversationId) ?? { responseAt: 0 };
+		entry.user = text;
+		this.lastExchanges.set(conversationId, entry);
+	}
+
+	private noteFeedbackResponse(conversationId: string, text: string): void {
+		this.pruneLastExchanges();
+		const entry = this.lastExchanges.get(conversationId) ?? { responseAt: 0 };
+		entry.response = text;
+		entry.responseAt = Date.now();
+		this.lastExchanges.set(conversationId, entry);
+	}
+
+	private pruneLastExchanges(): void {
+		const cutoff = Date.now() - FEEDBACK_CONTEXT_MAX_AGE_MS;
+		for (const [key, entry] of this.lastExchanges) {
+			// responseAt === 0 means the user side is recorded but the response
+			// has not landed yet; such entries are fresh by definition.
+			if (entry.responseAt > 0 && entry.responseAt < cutoff) this.lastExchanges.delete(key);
+		}
+	}
+
+	private feedbackContextFor(conversationId: string): FeedbackContext | undefined {
+		return buildFeedbackContext(this.lastExchanges.get(conversationId));
+	}
+
+	/**
 	 * P2.4: Map a Telegraf reaction-update context to a FeedbackSignal and
 	 * emit it. Best-effort — silently returns if the context is missing
 	 * required fields. Telegram filters out reactions set by the bot itself
@@ -1448,13 +1493,17 @@ export class TelegramChannel implements Channel {
 		// on the owner's behalf.
 		if (!this.isOwner(String(mr.user.id))) return;
 
+		const conversationId = `telegram:${mr.chat.id}`;
+
 		emitFeedback({
 			type,
-			conversationId: `telegram:${mr.chat.id}`,
+			conversationId,
 			messageTs: String(mr.message_id),
 			userId: String(mr.user.id),
 			source: "reaction",
 			timestamp: Date.now(),
+			channelId: this.id,
+			context: this.feedbackContextFor(conversationId),
 		});
 	}
 
@@ -1558,6 +1607,7 @@ export class TelegramChannel implements Channel {
 			};
 
 			try {
+				this.noteFeedbackUser(inbound.conversationId, inbound.text);
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -1651,6 +1701,7 @@ export class TelegramChannel implements Channel {
 					},
 				};
 
+				this.noteFeedbackUser(inbound.conversationId, inbound.text);
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -1752,6 +1803,7 @@ export class TelegramChannel implements Channel {
 					},
 				};
 
+				this.noteFeedbackUser(inbound.conversationId, inbound.text);
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -1786,6 +1838,8 @@ export class TelegramChannel implements Channel {
 				userId: senderId,
 				source: "button",
 				timestamp: Date.now(),
+				channelId: this.id,
+				context: this.feedbackContextFor(conversationId),
 			});
 
 			// Clear the buttons so the user can't click again.
@@ -1832,6 +1886,7 @@ export class TelegramChannel implements Channel {
 			};
 
 			try {
+				this.noteFeedbackUser(inbound.conversationId, inbound.text);
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);

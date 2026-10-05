@@ -258,3 +258,76 @@ describe("P2.4: reaction handler emits FeedbackSignal", () => {
 		expect(captured[1].messageTs).toBe("43");
 	});
 });
+
+describe("feedback context snapshot", () => {
+	let captured: FeedbackSignal[] = [];
+
+	beforeEach(() => {
+		captured = [];
+		setFeedbackHandler((signal: FeedbackSignal) => {
+			captured.push(signal);
+		});
+	});
+
+	test("reaction after a send() records the response as context", async () => {
+		const { channel, handlers } = makeChannelWithMockBot({
+			botToken: "test",
+			enableMessageReactions: true,
+		});
+		await channel.send("telegram:100", { text: "Here is the answer" });
+
+		const positive = handlers.reactions.find((r) => Array.isArray(r.emoji) && r.emoji.includes("👍"));
+		await positive?.handler(makeReactionCtx({ chatId: 100, messageId: 42, userId: 5 }));
+
+		expect(captured.length).toBe(1);
+		expect(captured[0].channelId).toBe("telegram");
+		expect(captured[0].context?.lastResponseText).toBe("Here is the answer");
+		expect(captured[0].context?.responseAt).toBeTruthy();
+	});
+
+	test("reaction with no recorded exchange carries no context", async () => {
+		const { handlers } = makeChannelWithMockBot({
+			botToken: "test",
+			enableMessageReactions: true,
+		});
+		const positive = handlers.reactions.find((r) => Array.isArray(r.emoji) && r.emoji.includes("👍"));
+		await positive?.handler(makeReactionCtx({ chatId: 100, messageId: 42, userId: 5 }));
+
+		expect(captured.length).toBe(1);
+		expect(captured[0].context).toBeUndefined();
+	});
+
+	test("user text recorded before the response lands in context", async () => {
+		const { channel, handlers } = makeChannelWithMockBot({
+			botToken: "test",
+			enableMessageReactions: true,
+		});
+		(channel as unknown as { noteFeedbackUser: (id: string, text: string) => void }).noteFeedbackUser(
+			"telegram:100",
+			"why did the build fail?",
+		);
+		await channel.send("telegram:100", { text: "Because the lockfile drifted" });
+
+		const negative = handlers.reactions.find((r) => Array.isArray(r.emoji) && r.emoji.includes("👎"));
+		await negative?.handler(makeReactionCtx({ chatId: 100, messageId: 43, userId: 5 }));
+
+		expect(captured[0].context?.lastUserText).toBe("why did the build fail?");
+		expect(captured[0].context?.lastResponseText).toBe("Because the lockfile drifted");
+	});
+
+	test("stale exchanges are not attached", async () => {
+		const { channel, handlers } = makeChannelWithMockBot({
+			botToken: "test",
+			enableMessageReactions: true,
+		});
+		await channel.send("telegram:100", { text: "Old answer" });
+		const map = (channel as unknown as { lastExchanges: Map<string, { responseAt: number }> }).lastExchanges;
+		const entry = map.get("telegram:100");
+		if (entry) entry.responseAt = Date.now() - 25 * 60 * 60 * 1000;
+
+		const positive = handlers.reactions.find((r) => Array.isArray(r.emoji) && r.emoji.includes("👍"));
+		await positive?.handler(makeReactionCtx({ chatId: 100, messageId: 44, userId: 5 }));
+
+		expect(captured[0].context).toBeUndefined();
+	});
+});

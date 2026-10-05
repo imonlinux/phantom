@@ -7,6 +7,20 @@
  * the agent decides what buttons to show via response hints.
  */
 
+/**
+ * Best-effort snapshot of the exchange a reaction refers to. Without it the
+ * evolution pipeline learns THAT the user reacted but never WHAT was being
+ * judged, because reaction webhooks carry no conversation content.
+ */
+export type FeedbackContext = {
+	/** The last user message the agent responded to in this conversation. */
+	lastUserText?: string;
+	/** The agent's most recent response in this conversation. */
+	lastResponseText?: string;
+	/** ISO timestamp of when that response was delivered. */
+	responseAt: string;
+};
+
 export type FeedbackSignal = {
 	type: "positive" | "negative" | "partial";
 	conversationId: string;
@@ -14,7 +28,48 @@ export type FeedbackSignal = {
 	userId: string;
 	source: "button" | "reaction";
 	timestamp: number;
+	/** Router channel id, so the evolution wiring can correlate conversations. */
+	channelId?: string;
+	/** Snapshot of the exchange the reaction refers to, when one is on record. */
+	context?: FeedbackContext;
 };
+
+/**
+ * Reactions older than this no longer count as feedback on the recorded
+ * exchange; the pipeline gets no context rather than the wrong context.
+ */
+export const FEEDBACK_CONTEXT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const FEEDBACK_CONTEXT_MAX_CHARS = 4000;
+
+/**
+ * Build a context snapshot from a channel's stored last-exchange entry.
+ * Returns undefined when the entry is missing, stale, or empty so callers
+ * never attach unrelated content to a reaction.
+ */
+export function buildFeedbackContext(
+	entry: { user?: string; response?: string; responseAt?: number } | undefined,
+	now: number = Date.now(),
+): FeedbackContext | undefined {
+	if (!entry?.responseAt) return undefined;
+	if (now - entry.responseAt > FEEDBACK_CONTEXT_MAX_AGE_MS) return undefined;
+	const context: FeedbackContext = { responseAt: new Date(entry.responseAt).toISOString() };
+	if (entry.user) context.lastUserText = entry.user.slice(0, FEEDBACK_CONTEXT_MAX_CHARS);
+	if (entry.response) context.lastResponseText = entry.response.slice(0, FEEDBACK_CONTEXT_MAX_CHARS);
+	if (!context.lastUserText && !context.lastResponseText) return undefined;
+	return context;
+}
+
+/**
+ * Map a feedback signal to the SessionSummary outcome the evolution
+ * pipeline understands. "partial" keeps its own outcome instead of being
+ * silently folded into success, which erased the "could be better" signal.
+ */
+export function feedbackToOutcome(type: FeedbackSignal["type"]): "success" | "failure" | "partial" {
+	if (type === "negative") return "failure";
+	if (type === "partial") return "partial";
+	return "success";
+}
 
 export type FeedbackHandler = (signal: FeedbackSignal) => void;
 

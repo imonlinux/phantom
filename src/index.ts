@@ -6,7 +6,7 @@ import { AgentRuntime } from "./agent/runtime.ts";
 import type { RuntimeEvent } from "./agent/runtime.ts";
 import { CliChannel } from "./channels/cli.ts";
 import { EmailChannel } from "./channels/email.ts";
-import { emitFeedback, setFeedbackHandler } from "./channels/feedback.ts";
+import { emitFeedback, feedbackToOutcome, setFeedbackHandler } from "./channels/feedback.ts";
 import { ChannelInteractionRegistry } from "./channels/interaction-adapter.ts";
 import { isInterruptText } from "./channels/interrupt.ts";
 import { createNextcloudInteractionFactory } from "./channels/nextcloud-interaction.ts";
@@ -184,17 +184,21 @@ async function main(): Promise<void> {
 	// Wire feedback to evolution engine
 	setFeedbackHandler((signal) => {
 		console.log(`[feedback] ${signal.type} from ${signal.source} (${signal.conversationId})`);
-		// Feedback signals feed into the next session's evolution context
+		// Feedback signals feed into the next session's evolution context.
+		// The context snapshot (if the channel captured one) carries the
+		// exchange the reaction judged, so the pipeline can learn from WHAT
+		// was disliked or praised instead of only THAT a reaction happened.
 		if (evolution) {
+			const context = signal.context;
 			const sessionSummary: SessionSummary = {
 				session_id: `feedback_${signal.messageTs}`,
 				session_key: signal.conversationId,
 				user_id: signal.userId,
-				user_messages: [],
-				assistant_messages: [],
+				user_messages: context?.lastUserText ? [context.lastUserText] : [],
+				assistant_messages: context?.lastResponseText ? [context.lastResponseText] : [],
 				tools_used: [],
 				files_tracked: [],
-				outcome: signal.type === "positive" ? "success" : signal.type === "negative" ? "failure" : "success",
+				outcome: feedbackToOutcome(signal.type),
 				cost_usd: 0,
 				started_at: new Date(signal.timestamp).toISOString(),
 				ended_at: new Date(signal.timestamp).toISOString(),
@@ -333,6 +337,7 @@ async function main(): Promise<void> {
 				userId: event.userId,
 				source: "reaction",
 				timestamp: Date.now(),
+				channelId: "slack",
 			});
 		});
 

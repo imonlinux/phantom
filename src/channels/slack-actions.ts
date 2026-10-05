@@ -61,6 +61,15 @@ export function registerSlackActions(app: App): void {
 				userId,
 				source: "button",
 				timestamp: Date.now(),
+				channelId: "slack",
+				// The clicked-on message IS the agent response being judged,
+				// so its text and timestamp are the exact context.
+				context: messageText
+					? {
+							lastResponseText: messageText.slice(0, 4000),
+							responseAt: new Date(Number.parseFloat(messageTs) * 1000).toISOString(),
+						}
+					: undefined,
 			});
 
 			// Replace feedback buttons with acknowledgment

@@ -6,8 +6,10 @@ import {
 	buildActionBlocks,
 	buildFeedbackAckBlocks,
 	buildFeedbackBlocks,
+	buildFeedbackContext,
 	buildFeedbackInlineKeyboard,
 	emitFeedback,
+	feedbackToOutcome,
 	parseFeedbackAction,
 	setFeedbackHandler,
 } from "../feedback.ts";
@@ -198,5 +200,69 @@ describe("feedback handler", () => {
 			source: "reaction",
 			timestamp: Date.now(),
 		});
+	});
+});
+
+describe("feedbackToOutcome", () => {
+	test("maps positive to success", () => {
+		expect(feedbackToOutcome("positive")).toBe("success");
+	});
+
+	test("maps negative to failure", () => {
+		// Regression: partial types used to fall through to success, which
+		// let a thumbs-down fire the gate with a "success" outcome.
+		expect(feedbackToOutcome("negative")).toBe("failure");
+	});
+
+	test("maps partial to partial, not success", () => {
+		expect(feedbackToOutcome("partial")).toBe("partial");
+	});
+});
+
+describe("buildFeedbackContext", () => {
+	const NOW = Date.now();
+
+	test("returns undefined for a missing entry", () => {
+		expect(buildFeedbackContext(undefined, NOW)).toBeUndefined();
+	});
+
+	test("returns undefined when the entry has no responseAt", () => {
+		expect(buildFeedbackContext({ user: "hi", response: "hello" }, NOW)).toBeUndefined();
+	});
+
+	test("returns undefined when the exchange is older than 24h", () => {
+		const stale = { user: "hi", response: "hello", responseAt: NOW - (24 * 60 * 60 * 1000 + 1) };
+		expect(buildFeedbackContext(stale, NOW)).toBeUndefined();
+	});
+
+	test("keeps an exchange right at the 24h boundary", () => {
+		const entry = { response: "answer", responseAt: NOW - 24 * 60 * 60 * 1000 };
+		const context = buildFeedbackContext(entry, NOW);
+		expect(context?.lastResponseText).toBe("answer");
+	});
+
+	test("builds context with user text, response text, and ISO responseAt", () => {
+		const entry = { user: "why did it fail?", response: "lockfile drift", responseAt: NOW };
+		const context = buildFeedbackContext(entry, NOW);
+		expect(context?.lastUserText).toBe("why did it fail?");
+		expect(context?.lastResponseText).toBe("lockfile drift");
+		expect(context?.responseAt).toBe(new Date(NOW).toISOString());
+	});
+
+	test("omits fields that are absent instead of writing empty strings", () => {
+		const context = buildFeedbackContext({ response: "only response", responseAt: NOW }, NOW);
+		expect(context?.lastUserText).toBeUndefined();
+		expect(context?.lastResponseText).toBe("only response");
+	});
+
+	test("returns undefined when both texts are absent", () => {
+		expect(buildFeedbackContext({ responseAt: NOW }, NOW)).toBeUndefined();
+	});
+
+	test("truncates texts to 4000 chars", () => {
+		const long = "x".repeat(5000);
+		const context = buildFeedbackContext({ user: long, response: long, responseAt: NOW }, NOW);
+		expect(context?.lastUserText?.length).toBe(4000);
+		expect(context?.lastResponseText?.length).toBe(4000);
 	});
 });

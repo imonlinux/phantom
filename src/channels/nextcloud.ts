@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { SessionStore } from "../agent/session-store.ts";
 import { attachmentFailureNote, attachmentsFallbackNote, readAttachmentBuffer } from "./attachments.ts";
-import { emitFeedback } from "./feedback.ts";
+import { buildFeedbackContext, emitFeedback, FEEDBACK_CONTEXT_MAX_AGE_MS, type FeedbackContext } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { TalkFileFetcher, type TalkFileParams, extractTalkFileParams } from "./nextcloud-files.ts";
 import { formatQuotedBlock } from "./quote.ts";
@@ -148,6 +148,11 @@ export class NextcloudChannel implements Channel {
 	private botFeatures: number | null = null;
 	// Talk 24 file shares: null until both service-account keys are configured
 	private fileFetcher: TalkFileFetcher | null = null;
+	// Most recent exchange per thread-scoped conversation, snapshotted so
+	// reaction feedback carries the content it judged. Feedback signals only
+	// know the room token, so lookups prefix-match across thread roots.
+	// Entries expire after FEEDBACK_CONTEXT_MAX_AGE_MS (see feedback.ts).
+	private lastExchanges = new Map<string, { user?: string; response?: string; responseAt: number }>();
 
 	constructor(config: NextcloudChannelConfig, sessionStore?: SessionStore) {
 		// Fix #14: Normalize webhookPath in constructor
@@ -340,6 +345,7 @@ export class NextcloudChannel implements Channel {
 		if (!success) {
 			throw new Error("Failed to post message to Nextcloud");
 		}
+		this.noteFeedbackResponse(conversationId, message.text);
 
 		// Fix #4: Use crypto.randomUUID() instead of Date.now()
 		return {
@@ -890,6 +896,7 @@ export class NextcloudChannel implements Channel {
 
 		if (this.messageHandler) {
 			try {
+				this.noteFeedbackUser(conversationId, inbound.text);
 				await this.messageHandler(inbound);
 			} catch (err: unknown) {
 				// Fix #3: Avoid msgId/msg name collision
@@ -1345,6 +1352,46 @@ export class NextcloudChannel implements Channel {
 		}
 	}
 
+	/**
+	 * Record the user/response side of the current exchange so a later
+	 * reaction in the room can be correlated with what was said. Keys are
+	 * thread-scoped conversationIds; lookups prefix-match on the room.
+	 */
+	private noteFeedbackUser(conversationId: string, text: string): void {
+		this.pruneLastExchanges();
+		const entry = this.lastExchanges.get(conversationId) ?? { responseAt: 0 };
+		entry.user = text;
+		this.lastExchanges.set(conversationId, entry);
+	}
+
+	private noteFeedbackResponse(conversationId: string, text: string): void {
+		this.pruneLastExchanges();
+		const entry = this.lastExchanges.get(conversationId) ?? { responseAt: 0 };
+		entry.response = text;
+		entry.responseAt = Date.now();
+		this.lastExchanges.set(conversationId, entry);
+	}
+
+	private pruneLastExchanges(): void {
+		const cutoff = Date.now() - FEEDBACK_CONTEXT_MAX_AGE_MS;
+		for (const [key, entry] of this.lastExchanges) {
+			// responseAt === 0 means the user side is recorded but the response
+			// has not landed yet; such entries are fresh by definition.
+			if (entry.responseAt > 0 && entry.responseAt < cutoff) this.lastExchanges.delete(key);
+		}
+	}
+
+	private feedbackContextFor(roomToken: string): FeedbackContext | undefined {
+		const roomKey = `nextcloud:${roomToken}`;
+		const prefix = `${roomKey}:`;
+		let best: { user?: string; response?: string; responseAt: number } | undefined;
+		for (const [key, entry] of this.lastExchanges) {
+			if (key !== roomKey && !key.startsWith(prefix)) continue;
+			if (!best || entry.responseAt > best.responseAt) best = entry;
+		}
+		return buildFeedbackContext(best);
+	}
+
 	private handleReactionFeedback(payload: NextcloudWebhookPayload, roomToken: string): void {
 		const actorId = payload.actor?.id;
 		// Talk 24 Like payload shape (spreed BotService::afterReactionAdded):
@@ -1445,6 +1492,8 @@ export class NextcloudChannel implements Channel {
 			userId: actorId,
 			source: "reaction",
 			timestamp: Date.now(),
+			channelId: this.id,
+			context: this.feedbackContextFor(roomToken),
 		});
 
 		console.log(`[nextcloud] Feedback captured: ${feedbackType} from ${actorId} on message ${messageId}`);

@@ -1164,6 +1164,34 @@ describe("NextcloudChannel", () => {
 			expect(feedbackSignals[0].type).toBe("negative");
 		});
 
+		test("attaches the recorded exchange as feedback context", async () => {
+			const channel = makeChannel();
+			(channel as unknown as { postToNextcloud: () => Promise<boolean> }).postToNextcloud = async () => true;
+			await channel.send(`nextcloud:${ROOM_TOKEN}:room`, { text: "Deploy finished" });
+
+			await process(channel, reactionPayload("Like", "users/james", "👍"));
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].channelId).toBe("nextcloud");
+			expect(feedbackSignals[0].context?.lastResponseText).toBe("Deploy finished");
+			expect(feedbackSignals[0].context?.responseAt).toBeTruthy();
+		});
+
+		test("context lookup matches across thread-scoped conversation keys", async () => {
+			const channel = makeChannel();
+			(channel as unknown as { postToNextcloud: () => Promise<boolean> }).postToNextcloud = async () => true;
+			await channel.send(`nextcloud:${ROOM_TOKEN}:thread7`, { text: "Threaded answer" });
+
+			await process(channel, reactionPayload("Like", "users/james", "👍"));
+			expect(feedbackSignals[0].context?.lastResponseText).toBe("Threaded answer");
+		});
+
+		test("reaction with no recorded exchange carries no context", async () => {
+			const channel = makeChannel();
+			await process(channel, reactionPayload("Like", "users/james", "👍"));
+			expect(feedbackSignals).toHaveLength(1);
+			expect(feedbackSignals[0].context).toBeUndefined();
+		});
+
 		test("ignores reaction removals (Undo type)", async () => {
 			const channel = makeChannel();
 			const result = await process(channel, reactionPayload("Undo", "users/james", "👍"));

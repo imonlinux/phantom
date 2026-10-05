@@ -6,6 +6,7 @@ function makeMockNextcloudChannel() {
 	const calls = {
 		setReaction: [] as Array<{ token: string; messageId: number; emoji: string; add: boolean }>,
 		postToNextcloud: [] as Array<{ token: string; text: string }>,
+		recordFeedbackResponse: [] as Array<{ cid: string; text: string }>,
 	};
 	const channel = {
 		setReaction: mock(async (token: string, messageId: number, emoji: string, add: boolean) => {
@@ -13,6 +14,10 @@ function makeMockNextcloudChannel() {
 		}),
 		postToNextcloud: mock(async (token: string, text: string) => {
 			calls.postToNextcloud.push({ token, text });
+			return true;
+		}),
+		recordFeedbackResponse: mock((cid: string, text: string) => {
+			calls.recordFeedbackResponse.push({ cid, text });
 		}),
 	};
 	return {
@@ -129,6 +134,15 @@ describe("createNextcloudInteractionFactory", () => {
 		const delivered = await instance?.deliverResponse?.({ text: "final answer", isError: false });
 		expect(delivered).toBe(true);
 		expect(calls.postToNextcloud).toEqual([{ token: "room1", text: "final answer" }]);
+	});
+
+	test("deliverResponse records the exchange for feedback correlation", async () => {
+		const { channel, calls } = makeMockNextcloudChannel();
+		const factory = createNextcloudInteractionFactory(channel);
+
+		const instance = factory(makeNextcloudMessage());
+		await instance?.deliverResponse?.({ text: "final answer", isError: false });
+		expect(calls.recordFeedbackResponse).toEqual([{ cid: "nextcloud:room1:42", text: "final answer" }]);
 	});
 
 	test("setQueued fires the configured queued emoji on instance creation", async () => {
@@ -248,6 +262,7 @@ function makeWorkingTextChannel(options?: {
 		}>,
 		editChatMessage: [] as Array<{ token: string; messageId: number; message: string }>,
 		deleteChatMessage: [] as Array<{ token: string; messageId: number }>,
+		recordFeedbackResponse: [] as Array<{ cid: string; text: string }>,
 	};
 	let nextPlaceholderId = 1000;
 
@@ -272,6 +287,9 @@ function makeWorkingTextChannel(options?: {
 		deleteChatMessage: mock(async (token: string, messageId: number) => {
 			calls.deleteChatMessage.push({ token, messageId });
 			return true;
+		}),
+		recordFeedbackResponse: mock((cid: string, text: string) => {
+			calls.recordFeedbackResponse.push({ cid, text });
 		}),
 	};
 	return {

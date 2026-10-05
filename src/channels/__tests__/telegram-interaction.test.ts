@@ -20,6 +20,7 @@ function makeMockTelegramChannel() {
 			text: string;
 			attachFeedback: boolean | undefined;
 		}>,
+		recordFeedbackResponse: [] as Array<{ cid: string; text: string }>,
 	};
 	let nextProgressMessageId: number | null = 7777;
 
@@ -47,6 +48,9 @@ function makeMockTelegramChannel() {
 				return messageId;
 			},
 		),
+		recordFeedbackResponse: mock((cid: string, text: string) => {
+			calls.recordFeedbackResponse.push({ cid, text });
+		}),
 	};
 
 	return {
@@ -234,6 +238,15 @@ describe("createTelegramInteractionFactory: progress stream (P2.2)", () => {
 		expect(calls.finishProgressMessage[0].text).toBe("Final answer");
 	});
 
+	test("claimed delivery records the exchange for feedback correlation", async () => {
+		const { channel, calls } = makeMockTelegramChannel();
+		const factory = createTelegramInteractionFactory(channel);
+		const instance = factory(makeTelegramMessage());
+		await instance?.onTurnStart?.();
+		await instance?.deliverResponse?.({ text: "Final answer", isError: false });
+		expect(calls.recordFeedbackResponse).toEqual([{ cid: "telegram:123", text: "Final answer" }]);
+	});
+
 	test("deliverResponse falls through (returns false) when progress message couldn't be posted", async () => {
 		const harness = makeMockTelegramChannel();
 		harness.setNextProgressMessageId(null);
@@ -243,6 +256,9 @@ describe("createTelegramInteractionFactory: progress stream (P2.2)", () => {
 		const claimed = await instance?.deliverResponse?.({ text: "answer", isError: false });
 		expect(claimed).toBe(false);
 		expect(harness.calls.finishProgressMessage.length).toBe(0);
+		// Fall-through means the router.send fallback runs, which records
+		// via send(); the interaction must not double-record here.
+		expect(harness.calls.recordFeedbackResponse.length).toBe(0);
 	});
 });
 

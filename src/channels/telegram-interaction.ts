@@ -143,6 +143,11 @@ export function createTelegramInteractionFactory(
 				const progressMessageId = progressStream.getMessageId();
 				if (progressMessageId) {
 					await progressStream.finish(text);
+					// The claimed path edits the progress message into the
+					// response and never goes through send(); record the
+					// exchange so a later reaction or button click on this
+					// response correlates with context.
+					tc.recordFeedbackResponse(`telegram:${cid}`, text);
 					if (attachments && attachments.length > 0 && tc) {
 						const failed = await tc.sendAttachments(cid, attachments);
 						if (failed.length > 0) {

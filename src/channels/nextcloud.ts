@@ -1372,6 +1372,16 @@ export class NextcloudChannel implements Channel {
 		this.lastExchanges.set(conversationId, entry);
 	}
 
+	/**
+	 * Record a delivered response for feedback correlation from any send
+	 * path. The interaction's deliverResponse claims every real Talk
+	 * delivery (it always returns true), so the send() fallback recording
+	 * never fires for actual turns; the interaction calls this instead.
+	 */
+	recordFeedbackResponse(conversationId: string, text: string): void {
+		this.noteFeedbackResponse(conversationId, text);
+	}
+
 	private pruneLastExchanges(): void {
 		const cutoff = Date.now() - FEEDBACK_CONTEXT_MAX_AGE_MS;
 		for (const [key, entry] of this.lastExchanges) {

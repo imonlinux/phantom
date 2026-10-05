@@ -1449,6 +1449,17 @@ export class TelegramChannel implements Channel {
 		this.lastExchanges.set(conversationId, entry);
 	}
 
+	/**
+	 * Record a delivered response for feedback correlation from any send
+	 * path. Turns with a progress message are delivered by the interaction's
+	 * deliverResponse (it edits the progress message into the response and
+	 * claims the delivery), never through send(); the interaction calls
+	 * this instead so those responses still correlate.
+	 */
+	recordFeedbackResponse(conversationId: string, text: string): void {
+		this.noteFeedbackResponse(conversationId, text);
+	}
+
 	private pruneLastExchanges(): void {
 		const cutoff = Date.now() - FEEDBACK_CONTEXT_MAX_AGE_MS;
 		for (const [key, entry] of this.lastExchanges) {

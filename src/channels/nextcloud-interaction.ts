@@ -239,6 +239,11 @@ export function createNextcloudInteractionFactory(
 					: fullText;
 				const posted = await deliverText(body);
 
+				// deliverResponse claims every Talk delivery, so the send()
+				// fallback never records the exchange; record it here so a
+				// later reaction on this response correlates with context.
+				if (posted) nc.recordFeedbackResponse(msg.conversationId, fullText);
+
 				if (progressStream) {
 					// Stop any pending throttle flush before settling
 					await progressStream.finish("");

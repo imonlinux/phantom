@@ -15,6 +15,7 @@ import { attachmentFailureNote, readAttachmentBuffer } from "./attachments.ts";
 import { buildFeedbackInlineKeyboard, emitFeedback, parseFeedbackAction } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { escapeMarkdownV2, splitForTelegram, TELEGRAM_MAX_MESSAGE_LENGTH } from "./markdown-v2.ts";
+import { formatQuotedBlock } from "./quote.ts";
 import { Database } from "bun:sqlite";
 
 type TelegrafBot = {
@@ -81,6 +82,12 @@ export type TelegrafContext = {
 		photo?: Array<{ file_id: string; file_size?: number }>;
 		// "Send as file" images and other documents.
 		document?: { file_id: string; file_name?: string; file_size?: number; mime_type?: string };
+		// Quote reply: the Bot API delivers the full parent message here.
+		reply_to_message?: {
+			from?: { id: number; first_name?: string; username?: string };
+			text?: string;
+			caption?: string;
+		};
 	};
 	reply: (text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
 	telegram: TelegramApi;
@@ -174,6 +181,19 @@ const TELEGRAM_WEBHOOK_IP_RANGES = [
 const DEFAULT_REJECTION_REPLY =
 	"Hi! I'm Phantom, a personal AI co-worker. I can only respond to my owner. " +
 	"<https://github.com/ghostwright/phantom>";
+
+/**
+ * Extracts a quoted parent message from a Telegram reply_to_message for
+ * prepending to the inbound text. Returns null when the message is not a
+ * reply.
+ */
+export function formatQuotedReply(
+	reply: { from?: { first_name?: string; username?: string }; text?: string; caption?: string } | undefined,
+): string | null {
+	if (!reply) return null;
+	const name = reply.from?.first_name ?? reply.from?.username ?? "unknown";
+	return formatQuotedBlock(name, reply.text ?? reply.caption);
+}
 
 export class TelegramChannel implements Channel {
 	readonly id = "telegram";
@@ -1520,13 +1540,16 @@ export class TelegramChannel implements Channel {
 
 			const conversationId = `telegram:${chatId}`;
 
+			// Quote-reply passthrough: surface the parent message so the agent
+			// sees the full context of a reply-quote instead of bare text.
+			const quotedBlock = formatQuotedReply(ctx.message.reply_to_message);
 			const inbound: InboundMessage = {
 				id: String(ctx.message.message_id),
 				channelId: this.id,
 				conversationId,
 				senderId,
 				senderName: from?.first_name ?? from?.username,
-				text,
+				text: quotedBlock ? `${quotedBlock}\n\n${text}` : text,
 				timestamp: new Date(),
 				metadata: {
 					telegramChatId: chatId,

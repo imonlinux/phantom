@@ -1390,6 +1390,142 @@ describe("NextcloudChannel", () => {
 		});
 	});
 
+	describe("Quote-reply passthrough", () => {
+		// spreed BotService::afterChatMessageSent wraps the parent Note inside
+		// inReplyTo; generateNote JSON-encodes the Note content as
+		// {message, parameters} and the parent display name rides on actor.
+		function replyPayload(inReplyTo: Record<string, unknown> | undefined, messageText = "and now?") {
+			return {
+				type: "Create",
+				actor: { type: "Person", id: "users/james", name: "James" },
+				object: {
+					id: 900,
+					type: "Note",
+					content: messageText,
+					...(inReplyTo !== undefined ? { inReplyTo } : {}),
+				},
+				target: { id: ROOM_TOKEN, name: "Test Room" },
+			};
+		}
+
+		function parentNote(content: unknown, name = "Phantom") {
+			return {
+				type: "Note",
+				actor: { type: "Person", id: "users/phantom", name },
+				object: {
+					id: 555,
+					type: "Note",
+					name: "message",
+					content,
+				},
+			};
+		}
+
+		function makeChannel(): NextcloudChannel {
+			return new NextcloudChannel({
+				sharedSecret: SHARED_SECRET,
+				talkServer: TALK_SERVER,
+				roomToken: ROOM_TOKEN,
+			});
+		}
+
+		async function process(channel: NextcloudChannel, payload: unknown) {
+			return (channel as unknown as {
+				processWebhookPayload: (p: unknown) => Promise<{ status?: number; error?: string }>;
+			}).processWebhookPayload(payload);
+		}
+
+		async function captureInbound(ch: NextcloudChannel): Promise<InboundMessage[]> {
+			const seen: InboundMessage[] = [];
+			ch.onMessage(async (msg) => {
+				seen.push(msg);
+			});
+			return seen;
+		}
+
+		test("prepends the quoted parent text for plain Reply payloads", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			const parent = parentNote(JSON.stringify({ message: "The sync landed cleanly.", parameters: [] }));
+			const result = await process(ch, replyPayload(parent, "What did you verify?"));
+
+			expect(result.error).toBeUndefined();
+			expect(seen).toHaveLength(1);
+			expect(seen[0].text).toBe("[Quoting Phantom]\n> The sync landed cleanly.\n\nWhat did you verify?");
+			// Session routing is unchanged: still rooted on the parent id
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:555`);
+		});
+
+		test("quotes the raw string when the parent content is not JSON", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, replyPayload(parentNote("plain parent text")));
+
+			expect(seen[0].text).toBe("[Quoting Phantom]\n> plain parent text\n\nand now?");
+		});
+
+		test("replies to textless parents carry a no-text marker", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, replyPayload(parentNote("")));
+
+			expect(seen[0].text).toBe("[Quoting Phantom: (no text)]\n\nand now?");
+		});
+
+		test("the {file} placeholder is quoted as a file share", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, replyPayload(parentNote(JSON.stringify({ message: "{file}", parameters: {} }))));
+
+			expect(seen[0].text).toBe("[Quoting Phantom]\n> (file share)\n\nand now?");
+		});
+
+		test("quotes are bounded at 500 characters", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			const long = JSON.stringify({ message: "y".repeat(700), parameters: [] });
+			await process(ch, replyPayload(parentNote(long)));
+
+			const text = seen[0].text ?? "";
+			const separator = text.indexOf("\n\n");
+			expect(separator).toBeGreaterThan(0);
+			const block = text.slice(0, separator);
+			const rest = text.slice(separator + 2);
+			expect(rest).toBe("and now?");
+			expect(block.startsWith("[Quoting Phantom]")).toBe(true);
+			expect(block.endsWith("...")).toBe(true);
+			expect(block.length).toBeLessThan(700);
+		});
+
+		test("threaded replies carry both the quote block and the thread root", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			const payload = replyPayload(parentNote(JSON.stringify({ message: "thread parent", parameters: [] }))) as {
+				object: Record<string, unknown>;
+			};
+			payload.object.threadId = 77;
+			await process(ch, payload);
+
+			expect(seen[0].text).toBe("[Quoting Phantom]\n> thread parent\n\nand now?");
+			expect(seen[0].conversationId).toBe(`nextcloud:${ROOM_TOKEN}:thread77`);
+		});
+
+		test("payloads without inReplyTo pass through unchanged", async () => {
+			const ch = makeChannel();
+			const seen = await captureInbound(ch);
+
+			await process(ch, replyPayload(undefined));
+
+			expect(seen[0].text).toBe("and now?");
+		});
+	});
+
 	describe("Bot feature probe (ask-features, Talk 24+)", () => {
 		test("connect probes ask-features and caches the bitmask", async () => {
 			// connect() in beforeEach fired the probe fire-and-forget; let it settle

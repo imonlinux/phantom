@@ -16,6 +16,7 @@ import { attachmentFailureNote, attachmentsFallbackNote, readAttachmentBuffer } 
 import { emitFeedback } from "./feedback.ts";
 import { findInFlightMessage } from "./interrupt.ts";
 import { TalkFileFetcher, type TalkFileParams, extractTalkFileParams } from "./nextcloud-files.ts";
+import { formatQuotedBlock } from "./quote.ts";
 import type {
 	Channel,
 	ChannelCapabilities,
@@ -87,11 +88,20 @@ interface NextcloudWebhookPayload {
 		threadId?: number | string; // Talk 24+: present when the message lives inside a thread
 		// Plain "Reply" payloads carry the parent only here (issue #2):
 		// BotService::afterChatMessageSent wraps the parent Note inside
-		// inReplyTo, and generateNote never emits a top-level parentMessageId
+		// inReplyTo, and generateNote never emits a top-level parentMessageId.
+		// The wrapped Note's content is always the JSON-encoded
+		// {message, parameters} envelope (generateNote in spreed's
+		// ActivityPubHelper), and the parent display name rides on actor.
 		inReplyTo?: {
 			type?: string;
+			actor?: {
+				type: string;
+				id: string;
+				name: string;
+			};
 			object?: {
 				id?: number | string;
+				content?: string;
 			};
 		};
 	};
@@ -796,6 +806,32 @@ export class NextcloudChannel implements Channel {
 					: Number.NaN;
 		const replyParentId = !isNaN(replyParentIdNum) ? replyParentIdNum : undefined;
 
+		// Quote-reply passthrough: unwrap the parent message text so the
+		// agent sees what is being replied to. generateNote JSON-encodes
+		// the Note content as {message, parameters}; raw strings are kept
+		// as a defensive fallback. The bare "{file}" placeholder means the
+		// parent was a file share.
+		const replyParentRaw = object?.inReplyTo?.object?.content;
+		let replyParentText: string | undefined;
+		if (typeof replyParentRaw === "string") {
+			if (replyParentRaw.startsWith("{")) {
+				try {
+					const parsed = JSON.parse(replyParentRaw) as { message?: unknown };
+					if (typeof parsed.message === "string") {
+						replyParentText = parsed.message === "{file}" ? "(file share)" : parsed.message;
+					}
+				} catch {
+					// Invalid JSON: quote the raw string instead of dropping it
+					replyParentText = replyParentRaw;
+				}
+			} else {
+				replyParentText = replyParentRaw;
+			}
+		}
+		const quotedBlock = object?.inReplyTo
+			? formatQuotedBlock(object.inReplyTo.actor?.name ?? "unknown", replyParentText)
+			: null;
+
 		let threadRoot: number | string;
 		let activeThreadId: number | undefined;
 		if (threadId !== undefined && this.getEnableThreads()) {
@@ -839,7 +875,7 @@ export class NextcloudChannel implements Channel {
 			conversationId,
 			senderId: actorId,
 			senderName: actorName,
-			text: message,
+			text: quotedBlock ? `${quotedBlock}\n\n${message}` : message,
 			timestamp: new Date(),
 			attachments: attachment,
 			metadata: {

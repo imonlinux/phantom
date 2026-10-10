@@ -55,6 +55,17 @@ export const MAX_TALK_FILE_BYTES = 50 * 1024 * 1024;
 const SHARE_TYPE_ROOM = 10;
 const SHARE_TYPE_LINK = 3;
 
+// Talk 24 appends this suffix to a per-user sharer subfolder when the
+// conversation lets recipients edit shared files (spreed
+// ConversationFolderService.php UPDATABLE_SUFFIX). Upstream's own
+// Listener.php matches both "<name>-<userid>" and "<name>-<userid> (u)",
+// so folder resolution here must accept both forms too.
+const UPDATABLE_SUFFIX = " (u)";
+
+function isSharerFolder(name: string, userId: string): boolean {
+	return name.endsWith(`-${userId}`) || name.endsWith(`-${userId}${UPDATABLE_SUFFIX}`);
+}
+
 export type TalkUploadDelivery = "room-share" | "link" | "folder";
 
 export type TalkUploadResult =
@@ -225,7 +236,7 @@ export class TalkFileFetcher {
 		if (!folder) {
 			return {
 				ok: false,
-				error: `no conversation folder for token ${roomToken} (is the service account a room participant?)`,
+				error: `no conversation folder for token ${roomToken}: the Phantom service account is not a participant of this conversation. Add it to the conversation so the Talk folder mounts in its WebDAV tree.`,
 			};
 		}
 		return { ok: true, folder };
@@ -237,9 +248,10 @@ export class TalkFileFetcher {
 	): Promise<{ ok: true; folder: string } | { ok: false; error: string }> {
 		const listing = await this.propfindFolderNames(`${this.davBase()}/${encodeSegments(`Talk/${convFolder}`)}`);
 		if (!listing.ok) return listing;
-		// Sharer subfolders are named "<display name>-<user id>"
+		// Sharer subfolders are named "<display name>-<user id>" with the
+		// optional updatable suffix appended (see UPDATABLE_SUFFIX above)
 		const rawId = rawNcUserId(actorId);
-		const folder = listing.names.find((n) => n.endsWith(`-${rawId}`));
+		const folder = listing.names.find((n) => isSharerFolder(n, rawId));
 		if (!folder) {
 			return { ok: false, error: `no sharer folder for ${rawId} in conversation folder` };
 		}
@@ -411,7 +423,7 @@ export class TalkFileFetcher {
 		const listing = await this.propfindFolderNames(`${this.davBase()}/${encodeSegments(`Talk/${convFolder}`)}`);
 		if (listing.ok) {
 			const existing = listing.names.find(
-				(n) => n !== convFolder && n.endsWith(`-${this.creds.userId}`),
+				(n) => n !== convFolder && isSharerFolder(n, this.creds.userId),
 			);
 			if (existing) {
 				this.outFolderCache.set(roomToken, existing);

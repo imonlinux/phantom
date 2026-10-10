@@ -193,7 +193,32 @@ describe("TalkFileFetcher", () => {
 		}) as typeof fetch;
 		const result = await newFetcher().fetchSharedFile(ROOM, "users/james", file);
 		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.error).toContain("room participant");
+		if (!result.ok) {
+			expect(result.error).toContain("not a participant");
+			expect(result.error).toContain("Add it to the conversation");
+		}
+	});
+
+	test("resolves a sharer folder carrying the Talk 24 updatable suffix", async () => {
+		const calls: Array<{ method: string; url: string }> = [];
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			calls.push({ method, url });
+			if (method === "PROPFIND") {
+				if (url.endsWith("/Talk")) return davPropfindResponse([`Phantom WorkAgent-${ROOM}`]);
+				return davPropfindResponse(["James McMurphy-james (u)"]);
+			}
+			return new Response("file-bytes", { status: 200 });
+		}) as typeof fetch;
+		const result = await newFetcher().fetchSharedFile(ROOM, "users/james", file);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.buffer.toString()).toBe("file-bytes");
+		const gets = calls.filter((c) => c.method === "GET");
+		expect(gets.length).toBe(1);
+		expect(decodeURIComponent(gets[0].url)).toContain(
+			`Talk/Phantom WorkAgent-${ROOM}/James McMurphy-james (u)/review.md`,
+		);
 	});
 
 	test("re-walks folders once when the cached path 404s", async () => {
@@ -321,6 +346,14 @@ describe("TalkFileFetcher.uploadToConversation", () => {
 		const mkcols = calls.filter((c) => c.method === "MKCOL");
 		expect(mkcols.length).toBe(1);
 		expect(decodeURIComponent(mkcols[0].url)).toContain("Phantom-phantom");
+	});
+
+	test("reuses an existing out folder carrying the updatable suffix", async () => {
+		const calls = stubUploadDav({ propfindSharer: ["Phantom-phantom (u)", "James McMurphy-james"] });
+		const result = await newFetcher().uploadToConversation(ROOM, "report.pdf", Buffer.from("pdf-bytes"));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.path).toBe(`Talk/James McMurphy-${ROOM}/Phantom-phantom (u)/report.pdf`);
+		expect(calls.filter((c) => c.method === "MKCOL").length).toBe(0);
 	});
 
 	test("reports a failed PUT", async () => {

@@ -234,9 +234,18 @@ export class TalkFileFetcher {
 		// Conversation folders are named "<display name>-<room token>"
 		const folder = listing.names.find((n) => n.endsWith(`-${roomToken}`));
 		if (!folder) {
+			// Two preconditions must hold for this folder to exist: the service
+			// account has to be a room participant, and at least one file has to
+			// have been shared in the room once so Nextcloud creates the folder.
+			// Verified live 2026-10-10: a room with the account joined but zero
+			// file shares lands here, so the note must name both, not blame
+			// membership alone.
+			console.warn(
+				`[nextcloud] No conversation folder for token ${roomToken} in the service account's WebDAV tree (participant missing or no file shared in the room yet)`,
+			);
 			return {
 				ok: false,
-				error: `no conversation folder for token ${roomToken}: the Phantom service account is not a participant of this conversation. Add it to the conversation so the Talk folder mounts in its WebDAV tree.`,
+				error: `no conversation folder for token ${roomToken} in the Phantom service account's WebDAV tree. The service account must be a room participant, and at least one file must be shared in the room once so Nextcloud creates the Talk folder.`,
 			};
 		}
 		return { ok: true, folder };

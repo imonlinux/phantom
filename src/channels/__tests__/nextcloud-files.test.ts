@@ -182,7 +182,7 @@ describe("TalkFileFetcher", () => {
 		if (!result.ok) expect(result.error).toContain("401");
 	});
 
-	test("reports a missing conversation folder with a participant hint", async () => {
+	test("reports a missing conversation folder naming both setup preconditions", async () => {
 		const calls = stubDav();
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -194,8 +194,8 @@ describe("TalkFileFetcher", () => {
 		const result = await newFetcher().fetchSharedFile(ROOM, "users/james", file);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toContain("not a participant");
-			expect(result.error).toContain("Add it to the conversation");
+			expect(result.error).toContain("must be a room participant");
+			expect(result.error).toContain("at least one file must be shared in the room");
 		}
 	});
 

@@ -92,7 +92,7 @@ describe("processBatch", () => {
 		queue.enqueue(makeSummary("a"), DECISION);
 		queue.enqueue(makeSummary("b"), DECISION);
 		const engine = fakeEngine(async () => baseResult());
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.successCount).toBe(2);
 		expect(result.failureCount).toBe(0);
 		for (const entry of result.results) expect(entry.disposition).toBe("ok");
@@ -102,7 +102,7 @@ describe("processBatch", () => {
 		const queue = new EvolutionQueue(db);
 		queue.enqueue(makeSummary("a"), DECISION);
 		const engine = fakeEngine(async () => baseResult({ status: "skip" }));
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.successCount).toBe(1);
 		for (const entry of result.results) expect(entry.disposition).toBe("skip");
 	});
@@ -119,7 +119,7 @@ describe("processBatch", () => {
 				error: "I1",
 			}),
 		);
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.failureCount).toBe(2);
 		for (const entry of result.results) {
 			expect(entry.disposition).toBe("invariant_failed");
@@ -131,7 +131,7 @@ describe("processBatch", () => {
 		const queue = new EvolutionQueue(db);
 		queue.enqueue(makeSummary("a"), DECISION);
 		const engine = fakeEngine(async () => baseResult({ error: "killed", status: "skip" }));
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.failureCount).toBe(1);
 		for (const entry of result.results) {
 			expect(entry.disposition).toBe("transient");
@@ -165,7 +165,7 @@ describe("processBatch", () => {
 			sizeSeen = batch.length;
 			return baseResult();
 		});
-		await processBatch(queue.drainAll(), engine);
+		await processBatch(queue.drainAll(), engine, queue);
 		expect(sizeSeen).toBe(3);
 	});
 });

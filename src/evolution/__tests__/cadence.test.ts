@@ -215,7 +215,7 @@ describe("processBatch", () => {
 		const drained = queue.drainAll();
 		const calls: QueuedSession[][] = [];
 		const engine = fakeEngine({ onDrainCalls: calls });
-		const result = await processBatch(drained, engine);
+		const result = await processBatch(drained, engine, queue);
 		expect(result.processed).toBe(1);
 		expect(result.successCount).toBe(1);
 		expect(calls.length).toBe(1);
@@ -231,7 +231,7 @@ describe("processBatch", () => {
 		const drained = queue.drainAll();
 		const calls: QueuedSession[][] = [];
 		const engine = fakeEngine({ onDrainCalls: calls });
-		const result = await processBatch(drained, engine);
+		const result = await processBatch(drained, engine, queue);
 		expect(result.processed).toBe(3);
 		expect(result.successCount).toBe(3);
 		expect(calls.length).toBe(1);
@@ -243,7 +243,7 @@ describe("processBatch", () => {
 		const queue = new EvolutionQueue(db);
 		queue.enqueue(makeSummary({ session_id: "a" }), DECISION);
 		const engine = fakeEngine({ onDrain: async () => skipResult() });
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.successCount).toBe(1);
 		expect(result.failureCount).toBe(0);
 	});
@@ -254,7 +254,7 @@ describe("processBatch", () => {
 		queue.enqueue(makeSummary({ session_id: "a" }), DECISION);
 		queue.enqueue(makeSummary({ session_id: "b" }), DECISION);
 		const engine = fakeEngine({ onDrain: async () => invariantFailResult() });
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.failureCount).toBe(2);
 		for (const entry of result.results) {
 			expect(entry.disposition).toBe("invariant_failed");

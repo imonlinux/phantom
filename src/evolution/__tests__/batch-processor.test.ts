@@ -80,7 +80,8 @@ describe("processBatch", () => {
 			called += 1;
 			return baseResult();
 		});
-		const result = await processBatch([], engine);
+		const queue = new EvolutionQueue(db);
+		const result = await processBatch([], engine, queue);
 		expect(result.processed).toBe(0);
 		expect(result.successCount).toBe(0);
 		expect(result.failureCount).toBe(0);
@@ -147,7 +148,7 @@ describe("processBatch", () => {
 		const engine = fakeEngine(async () => {
 			throw new Error("runtime blew up");
 		});
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.failureCount).toBe(3);
 		for (const entry of result.results) {
 			expect(entry.disposition).toBe("transient");

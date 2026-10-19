@@ -203,7 +203,9 @@ describe("processBatch", () => {
 	test("empty batch short-circuits without calling the engine", async () => {
 		const calls: QueuedSession[][] = [];
 		const engine = fakeEngine({ onDrain: async () => okResult(), onDrainCalls: calls });
-		const result = await processBatch([], engine);
+		const db = newDb();
+		const queue = new EvolutionQueue(db);
+		const result = await processBatch([], engine, queue);
 		expect(result.processed).toBe(0);
 		expect(calls.length).toBe(0);
 	});
@@ -272,7 +274,7 @@ describe("processBatch", () => {
 				throw new Error("boom");
 			},
 		});
-		const result = await processBatch(queue.drainAll(), engine);
+		const result = await processBatch(queue.drainAll(), engine, queue);
 		expect(result.failureCount).toBe(2);
 		for (const entry of result.results) {
 			expect(entry.disposition).toBe("transient");

@@ -139,12 +139,37 @@ drop the bullet and make a note in your reasoning. Do not write content that wou
 violate any of the eight principles. Never write to constitution.md under any
 circumstances.
 
+## Predicted effects and motivation
+
+Every change you declare in the sentinel carries two fields that survive into
+the operator's audit log:
+
+- predicted_effect: one sentence naming the observable behavior change the edit
+  should produce, and the batch evidence that motivates it. A deterministic
+  invariant (I10) requires it on every touched file, so a missing or too-short
+  effect is the most common avoidable warning.
+- motivation: "agentic" if the deficiency was in how the agent works (a
+  workflow miss, a tool choice, a formatting habit), or "domain" if it was
+  missing knowledge about the operator's stack or environment.
+
+Good: "Agent redirects report delivery to Telegram; batch shows three sessions
+correcting Slack-bound output."
+Bad: "improvement", "tidied up", "makes it better".
+
+Compact exemption: a change with action:"compact" declares
+"No behavior change; removes duplication." as its predicted_effect. That exact
+sentence is always valid for compacts.
+
+Motivation is your judgment call and is never checked against the file path.
+Scope (operational vs knowledge) is derived by TypeScript from the file you
+touched; you do not declare it.
+
 ## Your final message
 
 End your final assistant message with a single-line JSON sentinel. Four valid shapes:
 
-  {"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"added bullet about context7 plugin recognition"}]}
-  {"status":"ok","changes":[{"file":"user-profile.md","action":"compact","expected_shrinkage":0.45,"summary":"collapsed 4 magic-link duplicates into single section"}]}
+  {"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"added bullet about context7 plugin recognition","predicted_effect":"Agent scans plugin tools before asking for clarification on vague references.","motivation":"agentic"}]}
+  {"status":"ok","changes":[{"file":"user-profile.md","action":"compact","expected_shrinkage":0.45,"summary":"collapsed 4 magic-link duplicates into single section","predicted_effect":"No behavior change; removes duplication."}]}
   {"status":"skip","reason":"..."}
   {"status":"escalate","target":"sonnet","reason":"..."}
 

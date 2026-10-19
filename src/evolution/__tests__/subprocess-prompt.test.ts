@@ -66,6 +66,20 @@ describe("REFLECTION_SUBPROCESS_PROMPT", () => {
 		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("Bad:");
 		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("Good:");
 	});
+
+	test("teaches predicted effects, motivation, and the compact exemption", () => {
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("predicted_effect");
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("motivation");
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain('"agentic"');
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain('"domain"');
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("No behavior change; removes duplication.");
+		// The sentinel examples teach the full shape, not the bare one.
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain('"predicted_effect":"');
+	});
+
+	test("keeps scope derived: the prompt tells the agent not to declare it", () => {
+		expect(REFLECTION_SUBPROCESS_PROMPT).toContain("derived by TypeScript from the file you");
+	});
 });
 
 describe("buildSubprocessSystemPrompt", () => {

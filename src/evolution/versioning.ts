@@ -312,6 +312,21 @@ export function restoreSnapshot(config: EvolutionConfig, snapshot: DirectorySnap
 }
 
 /**
+ * Derived, not declared: scope classifies an evolved file as operational
+ * (changes how the agent works) or knowledge (changes what the agent
+ * knows) from the file path alone. The agent never declares scope, so the
+ * split in stats and the operator log cannot disagree with the file it
+ * describes. Imperative surfaces (persona, strategies, corrections,
+ * principles) are operational; declarative fact files (domain knowledge,
+ * user profile) are knowledge. Unknown paths default to knowledge.
+ */
+export function deriveScope(file: string): "operational" | "knowledge" {
+	if (file === "persona.md") return "operational";
+	if (file.startsWith("memory/") || file.startsWith("strategies/")) return "operational";
+	return "knowledge";
+}
+
+/**
  * Produce a VersionChange[] describing the diff between a pre-snapshot and
  * the current post-subprocess state. Used by the reflection subprocess to
  * build the changelog entry that lands on disk and in the evolution log.
@@ -331,10 +346,25 @@ export function buildVersionChanges(
 	rationale: string,
 ): VersionChange[] {
 	const changes: VersionChange[] = [];
-	const annotated = new Map<string, { action?: "edit" | "compact" | "new"; summary?: string }>();
+	const annotated = new Map<
+		string,
+		{
+			action?: "edit" | "compact" | "new";
+			summary?: string;
+			predicted_effect?: string;
+			motivation?: "agentic" | "domain";
+		}
+	>();
 	if (sentinel?.changes) {
 		for (const c of sentinel.changes) {
-			annotated.set(c.file, { action: c.action, summary: c.summary });
+			annotated.set(c.file, {
+				action: c.action,
+				summary: c.summary,
+				// The sentinel parser is permissive by design, so guard here:
+				// only well-formed declared fields reach version.json.
+				predicted_effect: typeof c.predicted_effect === "string" ? c.predicted_effect : undefined,
+				motivation: c.motivation === "agentic" || c.motivation === "domain" ? c.motivation : undefined,
+			});
 		}
 	}
 
@@ -381,6 +411,9 @@ export function buildVersionChanges(
 			summary: annotation?.summary ?? describeDiff(preContent, postContent),
 			rationale,
 			session_ids: sessionIds,
+			predicted_effect: annotation?.predicted_effect,
+			motivation: annotation?.motivation,
+			scope: deriveScope(rel),
 		});
 	}
 

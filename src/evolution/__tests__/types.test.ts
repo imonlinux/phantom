@@ -115,6 +115,8 @@ describe("Phase 3 evolution types are structurally consistent", () => {
 			"sentinel_parse_fail",
 			"total_cost_usd",
 			"compactions_performed",
+			"changes_operational",
+			"changes_knowledge",
 			"files_touched",
 		];
 		// If any key disappears from the type this line fails compilation.

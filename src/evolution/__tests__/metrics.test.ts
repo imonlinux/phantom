@@ -108,6 +108,8 @@ describe("evolution metrics", () => {
 			expect(stats.drains).toBe(0);
 			expect(stats.stage_haiku_runs).toBe(0);
 			expect(stats.total_cost_usd).toBe(0);
+			expect(stats.changes_operational).toBe(0);
+			expect(stats.changes_knowledge).toBe(0);
 			expect(stats.files_touched).toEqual({});
 		});
 
@@ -118,11 +120,15 @@ describe("evolution metrics", () => {
 				stage_haiku_runs: 1,
 				status_ok: 1,
 				total_cost_usd: 0.001,
+				changes_operational: 2,
+				changes_knowledge: 1,
 				files_touched: { "user-profile.md": 1 },
 			});
 			const metrics = JSON.parse(readFileSync(`${TEST_DIR}/meta/metrics.json`, "utf-8"));
 			expect(metrics.reflection_stats.drains).toBe(1);
 			expect(metrics.reflection_stats.stage_haiku_runs).toBe(1);
+			expect(metrics.reflection_stats.changes_operational).toBe(2);
+			expect(metrics.reflection_stats.changes_knowledge).toBe(1);
 			expect(metrics.reflection_stats.files_touched["user-profile.md"]).toBe(1);
 		});
 

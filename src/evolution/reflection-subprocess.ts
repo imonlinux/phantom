@@ -365,6 +365,9 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 			details: changes,
 		});
 		bumpFilesTouched(stats, changes);
+		stats.changes_operational =
+			(stats.changes_operational ?? 0) + changes.filter((c) => c.scope === "operational").length;
+		stats.changes_knowledge = (stats.changes_knowledge ?? 0) + changes.filter((c) => c.scope === "knowledge").length;
 		stats.status_ok = (stats.status_ok ?? 0) + 1;
 		if (changes.some((c) => c.type === "compact")) {
 			stats.compactions_performed = (stats.compactions_performed ?? 0) + 1;

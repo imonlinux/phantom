@@ -16,6 +16,16 @@ export type VersionChange = {
 	summary: string;
 	rationale: string;
 	session_ids: string[];
+	/**
+	 * Declared by the agent in the sentinel and carried through so it lands
+	 * in version.json and evolution-log.jsonl for auditing. TypeScript never
+	 * judges its quality; that is the A2 contrast judge's job.
+	 */
+	predicted_effect?: string;
+	/** Agent-declared judgment of why: how the agent works vs what it knows. */
+	motivation?: "agentic" | "domain";
+	/** Derived in TypeScript from the file path. Never agent-declared. */
+	scope?: "operational" | "knowledge";
 };
 
 export type EvolutionVersion = {
@@ -177,6 +187,8 @@ export type ReflectionStats = {
 	sentinel_parse_fail: number;
 	total_cost_usd: number;
 	compactions_performed: number;
+	changes_operational: number;
+	changes_knowledge: number;
 	files_touched: Record<string, number>;
 };
 

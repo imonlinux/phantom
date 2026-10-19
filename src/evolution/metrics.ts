@@ -111,6 +111,8 @@ export function emptyReflectionStats(): ReflectionStats {
 		sentinel_parse_fail: 0,
 		total_cost_usd: 0,
 		compactions_performed: 0,
+		changes_operational: 0,
+		changes_knowledge: 0,
 		files_touched: {},
 	};
 }

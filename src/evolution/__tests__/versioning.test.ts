@@ -214,6 +214,88 @@ describe("Versioning", () => {
 			expect(byFile.get("strategies/new-strategy.md")?.type).toBe("new");
 			expect(byFile.get("user-profile.md")?.summary).toBe("added context7 plugin note");
 		});
+
+		test("carries predicted_effect and motivation through and derives scope", () => {
+			const config = testConfig();
+			const pre = snapshotDirectory(config);
+			writeFileSync(`${TEST_DIR}/domain-knowledge.md`, "# Domain\n\n- New fact.\n", "utf-8");
+			writeFileSync(`${TEST_DIR}/memory/principles.md`, "# Principles\n\n- New principle.\n", "utf-8");
+			writeFileSync(`${TEST_DIR}/strategies/task-patterns.md`, "# Tasks\n\n- New pattern.\n", "utf-8");
+			const post = snapshotDirectory(config);
+
+			const sentinel: SubprocessSentinel = {
+				status: "ok",
+				changes: [
+					{
+						file: "domain-knowledge.md",
+						action: "edit",
+						predicted_effect: "Agent cites the new fact instead of guessing.",
+						motivation: "domain",
+					},
+					{
+						file: "memory/principles.md",
+						action: "edit",
+						predicted_effect: "Agent drops stale principles before fresh ones when compacting.",
+						motivation: "agentic",
+					},
+					{ file: "strategies/task-patterns.md", action: "edit" },
+				],
+			};
+			const changes = buildVersionChanges(pre, post, sentinel, ["s1"], "drain=test");
+			const byFile = new Map(changes.map((c) => [c.file, c]));
+			expect(byFile.get("domain-knowledge.md")?.predicted_effect).toBe("Agent cites the new fact instead of guessing.");
+			expect(byFile.get("domain-knowledge.md")?.motivation).toBe("domain");
+			expect(byFile.get("domain-knowledge.md")?.scope).toBe("knowledge");
+			expect(byFile.get("memory/principles.md")?.scope).toBe("operational");
+			expect(byFile.get("memory/principles.md")?.motivation).toBe("agentic");
+			expect(byFile.get("strategies/task-patterns.md")?.scope).toBe("operational");
+			expect(byFile.get("strategies/task-patterns.md")?.predicted_effect).toBeUndefined();
+		});
+
+		test("derives scope from the path map: persona, memory, strategies operational; facts knowledge", () => {
+			const config = testConfig();
+			const pre = snapshotDirectory(config);
+			writeFileSync(`${TEST_DIR}/persona.md`, "# Persona\n\n- Be terse.\n", "utf-8");
+			writeFileSync(`${TEST_DIR}/memory/corrections.md`, "# Corrections\n\n- Stop guessing.\n", "utf-8");
+			writeFileSync(
+				`${TEST_DIR}/user-profile.md`,
+				"# User Profile\n\n- Existing bullet.\n- Prefers terse answers.\n",
+				"utf-8",
+			);
+			writeFileSync(`${TEST_DIR}/unknown-file.md`, "# Unknown\n", "utf-8");
+			const post = snapshotDirectory(config);
+
+			const changes = buildVersionChanges(pre, post, null, ["s1"], "drain=test");
+			const byFile = new Map(changes.map((c) => [c.file, c]));
+			expect(byFile.get("persona.md")?.scope).toBe("operational");
+			expect(byFile.get("memory/corrections.md")?.scope).toBe("operational");
+			expect(byFile.get("user-profile.md")?.scope).toBe("knowledge");
+			expect(byFile.get("unknown-file.md")?.scope).toBe("knowledge");
+		});
+
+		test("drops declared fields that arrive with junk types or values", () => {
+			const config = testConfig();
+			const pre = snapshotDirectory(config);
+			writeFileSync(`${TEST_DIR}/domain-knowledge.md`, "# Domain\n\n- Fact A.\n", "utf-8");
+			writeFileSync(`${TEST_DIR}/user-profile.md`, "# User Profile\n\n- Existing bullet.\n- New fact.\n", "utf-8");
+			const post = snapshotDirectory(config);
+			// The sentinel parser is permissive, so buildVersionChanges sees
+			// whatever the JSON contained. Simulate junk that slipped past the
+			// parser's shape check.
+			const sentinel = {
+				status: "ok",
+				changes: [
+					{ file: "domain-knowledge.md", action: "edit", predicted_effect: 42, motivation: "banana" },
+					{ file: "user-profile.md", action: "edit", predicted_effect: "Valid effect.", motivation: "agentic" },
+				],
+			} as unknown as SubprocessSentinel;
+			const changes = buildVersionChanges(pre, post, sentinel, ["s1"], "drain=test");
+			const byFile = new Map(changes.map((c) => [c.file, c]));
+			expect(byFile.get("domain-knowledge.md")?.predicted_effect).toBeUndefined();
+			expect(byFile.get("domain-knowledge.md")?.motivation).toBeUndefined();
+			expect(byFile.get("user-profile.md")?.predicted_effect).toBe("Valid effect.");
+			expect(byFile.get("user-profile.md")?.motivation).toBe("agentic");
+		});
 	});
 
 	describe("migrateOldLogEntry / getEvolutionLog", () => {

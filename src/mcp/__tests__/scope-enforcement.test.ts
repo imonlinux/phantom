@@ -32,7 +32,8 @@ function createMockEvolution() {
 			persona: "",
 			userProfile: "",
 			domainKnowledge: "",
-			strategies: { taskPatterns: "", toolPreferences: "", errorRecovery: "" },
+			memory: { corrections: "", principles: "" },
+			strategies: {},
 			meta: { version: 1, metricsSnapshot: { session_count: 0, success_rate_7d: 0 } },
 		}),
 		getMetrics: () => ({

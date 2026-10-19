@@ -145,7 +145,17 @@ describe("EvolutionEngine", () => {
 		expect(config.constitution).toContain("Honesty");
 		expect(config.persona).toContain("Be direct");
 		expect(config.userProfile).toContain("User Profile");
+		expect(config.memory.corrections).toContain("Corrections");
+		expect(config.memory.principles).toContain("Principles");
+		expect(Object.keys(config.strategies).sort()).toEqual(["error-recovery", "task-patterns", "tool-preferences"]);
 		expect(config.meta.version).toBe(0);
+	});
+
+	test("getConfig globs reflector-created strategy files", () => {
+		writeFileSync(`${TEST_DIR}/phantom-config/strategies/memory-management.md`, "# Memory Management\n", "utf-8");
+		const engine = new EvolutionEngine(CONFIG_PATH);
+		const config = engine.getConfig();
+		expect(config.strategies["memory-management"]).toContain("Memory Management");
 	});
 
 	test("afterSession skip path leaves version unchanged", async () => {

@@ -2,8 +2,9 @@ import type { EvolvedConfig } from "../../evolution/types.ts";
 
 // Assembles the "evolved" portion of the system prompt from the live
 // EvolvedConfig: constitution, communication style, user profile, domain
-// knowledge, and learned strategies. Returns an empty string when none of
-// the sections have meaningful content so the assembler can drop the block.
+// knowledge, corrections, principles, and learned strategies. Returns an
+// empty string when none of the sections have meaningful content so the
+// assembler can drop the block.
 export function buildEvolvedSections(evolved: EvolvedConfig): string {
 	const parts: string[] = [];
 
@@ -23,15 +24,19 @@ export function buildEvolvedSections(evolved: EvolvedConfig): string {
 		parts.push(`# Domain Knowledge\n\n${evolved.domainKnowledge.trim()}`);
 	}
 
+	if (evolved.memory.corrections.trim() && countContentLines(evolved.memory.corrections) > 1) {
+		parts.push(`# Corrections\n\n${evolved.memory.corrections.trim()}`);
+	}
+
+	if (evolved.memory.principles.trim() && countContentLines(evolved.memory.principles) > 1) {
+		parts.push(`# Principles\n\n${evolved.memory.principles.trim()}`);
+	}
+
 	const strategyParts: string[] = [];
-	if (evolved.strategies.taskPatterns.trim() && countContentLines(evolved.strategies.taskPatterns) > 1) {
-		strategyParts.push(evolved.strategies.taskPatterns.trim());
-	}
-	if (evolved.strategies.toolPreferences.trim() && countContentLines(evolved.strategies.toolPreferences) > 1) {
-		strategyParts.push(evolved.strategies.toolPreferences.trim());
-	}
-	if (evolved.strategies.errorRecovery.trim() && countContentLines(evolved.strategies.errorRecovery) > 1) {
-		strategyParts.push(evolved.strategies.errorRecovery.trim());
+	for (const content of Object.values(evolved.strategies)) {
+		if (content.trim() && countContentLines(content) > 1) {
+			strategyParts.push(content.trim());
+		}
 	}
 	if (strategyParts.length > 0) {
 		parts.push(`# Learned Strategies\n\n${strategyParts.join("\n\n")}`);

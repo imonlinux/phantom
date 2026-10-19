@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import { type EvolutionConfig, loadEvolutionConfig } from "./config.ts";
 import type { GateDecision } from "./gate-types.ts";
@@ -334,16 +334,29 @@ export class EvolutionEngine {
 		const version = readVersion(this.config);
 		const metricsSnapshot = getMetricsSnapshot(this.config);
 
+		// strategies/*.md loads as a glob so reflector-created strategy files
+		// reach the prompt without code changes. Keys are file stems, sorted
+		// for deterministic prompt ordering.
+		const strategiesDir = join(dir, "strategies");
+		const strategies: Record<string, string> = {};
+		if (existsSync(strategiesDir)) {
+			for (const file of readdirSync(strategiesDir)
+				.filter((f) => f.endsWith(".md"))
+				.sort()) {
+				strategies[basename(file, ".md")] = readConfigFile(join(strategiesDir, file));
+			}
+		}
+
 		return {
 			constitution: readConfigFile(join(dir, "constitution.md")),
 			persona: readConfigFile(join(dir, "persona.md")),
 			userProfile: readConfigFile(join(dir, "user-profile.md")),
 			domainKnowledge: readConfigFile(join(dir, "domain-knowledge.md")),
-			strategies: {
-				taskPatterns: readConfigFile(join(dir, "strategies/task-patterns.md")),
-				toolPreferences: readConfigFile(join(dir, "strategies/tool-preferences.md")),
-				errorRecovery: readConfigFile(join(dir, "strategies/error-recovery.md")),
+			memory: {
+				corrections: readConfigFile(join(dir, "memory/corrections.md")),
+				principles: readConfigFile(join(dir, "memory/principles.md")),
 			},
+			strategies,
 			meta: {
 				version: version.version,
 				metricsSnapshot,

@@ -82,11 +82,11 @@ export type EvolvedConfig = {
 	persona: string;
 	userProfile: string;
 	domainKnowledge: string;
-	strategies: {
-		taskPatterns: string;
-		toolPreferences: string;
-		errorRecovery: string;
+	memory: {
+		corrections: string;
+		principles: string;
 	};
+	strategies: Record<string, string>;
 	meta: {
 		version: number;
 		metricsSnapshot: MetricsSnapshot;

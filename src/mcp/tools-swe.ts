@@ -41,8 +41,8 @@ function registerCodebaseQuery(server: McpServer, deps: ToolDependencies): void 
 					results.domain_knowledge = domainKnowledge;
 				}
 				if (scope === "all" || scope === "patterns") {
-					results.task_patterns = strategies.taskPatterns;
-					results.tool_preferences = strategies.toolPreferences;
+					results.task_patterns = strategies["task-patterns"] ?? "";
+					results.tool_preferences = strategies["tool-preferences"] ?? "";
 				}
 			}
 

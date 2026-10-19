@@ -27,7 +27,12 @@ function createMockEvolution() {
 			persona: "A test phantom.",
 			userProfile: "Test user",
 			domainKnowledge: "Test domain knowledge",
-			strategies: { taskPatterns: "patterns", toolPreferences: "prefs", errorRecovery: "recovery" },
+			memory: { corrections: "", principles: "" },
+			strategies: {
+				"task-patterns": "patterns",
+				"tool-preferences": "prefs",
+				"error-recovery": "recovery",
+			},
 			meta: { version: 3, metricsSnapshot: { session_count: 10, success_rate_7d: 0.9 } },
 		}),
 		getMetrics: () => ({

@@ -116,6 +116,21 @@ export type SubprocessSentinel = {
 		action?: "edit" | "compact" | "new";
 		summary?: string;
 		expected_shrinkage?: number;
+		/**
+		 * Evidence standard: the observable behavior change this edit should
+		 * produce, and the batch evidence that motivates it. One sentence.
+		 * TypeScript never judges its quality; that is the contrast judge's
+		 * job (Phase A2). Presence and minimum length are I10's deterministic
+		 * check.
+		 */
+		predicted_effect?: string;
+		/**
+		 * The agent's own judgment of why the change is needed: a deficiency
+		 * in how the agent works ("agentic") or missing domain knowledge
+		 * ("domain"). Declared, not derived; scope (operational vs knowledge)
+		 * is the derived one and lives in TypeScript.
+		 */
+		motivation?: "agentic" | "domain";
 	}>;
 };
 

@@ -76,4 +76,44 @@ describe("parseSentinel", () => {
 		const r = parseSentinel('{"status":"escalate","target":"opus","reason":"needs top reasoning"}');
 		expect(r?.target).toBe("opus");
 	});
+
+	test("round-trips predicted_effect and motivation on a change entry", () => {
+		const r = parseSentinel(
+			`{"status":"ok","changes":[{"file":"memory/corrections.md","action":"edit",` +
+				`"summary":"Add operator correction",` +
+				`"predicted_effect":"Agent refuses non-allowlisted senders at intake instead of after fetch.",` +
+				`"motivation":"agentic"}]}`,
+		);
+		expect(r?.changes?.[0].predicted_effect).toBe(
+			"Agent refuses non-allowlisted senders at intake instead of after fetch.",
+		);
+		expect(r?.changes?.[0].motivation).toBe("agentic");
+	});
+
+	test("accepts the domain motivation value", () => {
+		const r = parseSentinel(
+			`{"status":"ok","changes":[{"file":"domain-knowledge.md","action":"edit",` +
+				`"predicted_effect":"Carbonio jail formats parse without a body-regex fallback.",` +
+				`"motivation":"domain"}]}`,
+		);
+		expect(r?.changes?.[0].motivation).toBe("domain");
+	});
+
+	test("parses sentinel without the new fields (backward compatible)", () => {
+		const r = parseSentinel('{"status":"ok","changes":[{"file":"persona.md","action":"edit"}]}');
+		expect(r?.status).toBe("ok");
+		expect(r?.changes).toHaveLength(1);
+		expect(r?.changes?.[0].predicted_effect).toBeUndefined();
+		expect(r?.changes?.[0].motivation).toBeUndefined();
+	});
+
+	test("parses the compact exemption declaring a no-op effect", () => {
+		const r = parseSentinel(
+			`{"status":"ok","changes":[{"file":"domain-knowledge.md","action":"compact",` +
+				`"expected_shrinkage":0.3,` +
+				`"predicted_effect":"No behavior change; removes duplication."}]}`,
+		);
+		expect(r?.changes?.[0].action).toBe("compact");
+		expect(r?.changes?.[0].predicted_effect).toBe("No behavior change; removes duplication.");
+	});
 });

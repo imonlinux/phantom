@@ -45,10 +45,13 @@ const CANONICAL_FILES = [
 
 // I4 size bounds. Locked decision 8 raised MAX_GROWTH_PER_FILE to 80 lines
 // from the Phase 3 research draft of 50. The other bounds stay as drafted.
+// MIN_PREDICTED_EFFECT_CHARS backs I10: shorter than any real effect
+// sentence, longer than filler like "ok" or "tidied".
 export const INVARIANT_BOUNDS = {
 	MAX_GROWTH_PER_FILE_LINES: 80,
 	MAX_GROWTH_TOTAL_LINES: 100,
 	MAX_SHRINKAGE_RATIO: 0.7,
+	MIN_PREDICTED_EFFECT_CHARS: 20,
 } as const;
 
 // I6 hard-tier credential patterns. Anything in this list is an
@@ -329,6 +332,37 @@ export function runInvariantCheck(
 					check: "I8",
 					file: t,
 					message: `${t} changed but was not declared in sentinel`,
+				});
+			}
+		}
+	}
+
+	// --- I10. Predicted effects (soft during the A1 soak) ----------------
+	// Every touched writeable file must carry a declared change with a
+	// non-empty predicted_effect of at least MIN_PREDICTED_EFFECT_CHARS.
+	// Presence and length only: quality judgment is the A2 contrast judge's
+	// job, and this file forbids natural-language classification. A compact
+	// change satisfies the rule with the stock phrase "no behavior change;
+	// removes duplication" exactly like any other string of sufficient
+	// length; the exemption is semantic (teaching prompt, A2), not a code
+	// path here. Sentinel parse failure degrades the sentinel to
+	// {status:"ok"} upstream, so every touched file arrives undeclared and
+	// lands here: precisely the signal the predicted_effect_missing counter
+	// exists to surface. Scope violations are I1's job and constitution
+	// changes are I2's, so both are skipped below.
+	if (sentinel !== null) {
+		const declaredEffects = new Map<string, string | undefined>();
+		for (const c of sentinel.changes ?? []) {
+			declaredEffects.set(c.file, c.predicted_effect);
+		}
+		for (const rel of touched) {
+			if (!isWriteableFile(rel)) continue;
+			const effect = declaredEffects.get(rel);
+			if (typeof effect !== "string" || effect.trim().length < INVARIANT_BOUNDS.MIN_PREDICTED_EFFECT_CHARS) {
+				softWarnings.push({
+					check: "I10",
+					file: rel,
+					message: `${rel} changed without a usable predicted_effect (needs >= ${INVARIANT_BOUNDS.MIN_PREDICTED_EFFECT_CHARS} chars)`,
 				});
 			}
 		}

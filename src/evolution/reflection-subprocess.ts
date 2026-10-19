@@ -312,6 +312,13 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 		if (invariant.softWarnings.length > 0) {
 			stats.invariant_warned_soft = (stats.invariant_warned_soft ?? 0) + invariant.softWarnings.length;
 		}
+		// I10 soak counter: how many touched files arrived without a usable
+		// predicted_effect. This is the number the A1e hard-flip decision
+		// reads after the soak window.
+		const i10Warnings = invariant.softWarnings.filter((w) => w.check === "I10").length;
+		if (i10Warnings > 0) {
+			stats.predicted_effect_missing = (stats.predicted_effect_missing ?? 0) + i10Warnings;
+		}
 
 		if (!invariant.passed) {
 			restoreSnapshot(input.config, snapshot);

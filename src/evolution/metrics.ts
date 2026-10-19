@@ -113,6 +113,7 @@ export function emptyReflectionStats(): ReflectionStats {
 		compactions_performed: 0,
 		changes_operational: 0,
 		changes_knowledge: 0,
+		predicted_effect_missing: 0,
 		files_touched: {},
 	};
 }

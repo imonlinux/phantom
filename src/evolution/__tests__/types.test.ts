@@ -117,15 +117,16 @@ describe("Phase 3 evolution types are structurally consistent", () => {
 			"compactions_performed",
 			"changes_operational",
 			"changes_knowledge",
+			"predicted_effect_missing",
 			"files_touched",
 		];
 		// If any key disappears from the type this line fails compilation.
 		expect(keys.length).toBeGreaterThan(15);
 	});
 
-	test("InvariantCode includes all nine invariants", () => {
-		const codes: InvariantCode[] = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"];
-		expect(codes).toHaveLength(9);
+	test("InvariantCode includes all ten invariants", () => {
+		const codes: InvariantCode[] = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10"];
+		expect(codes).toHaveLength(10);
 	});
 
 	test("ReflectionTier and SubprocessStatus have the expected shapes", () => {

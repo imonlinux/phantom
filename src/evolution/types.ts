@@ -144,7 +144,7 @@ export type SubprocessSentinel = {
 	}>;
 };
 
-export type InvariantCode = "I1" | "I2" | "I3" | "I4" | "I5" | "I6" | "I7" | "I8" | "I9";
+export type InvariantCode = "I1" | "I2" | "I3" | "I4" | "I5" | "I6" | "I7" | "I8" | "I9" | "I10";
 
 export type InvariantFailure = {
 	check: InvariantCode;
@@ -189,6 +189,13 @@ export type ReflectionStats = {
 	compactions_performed: number;
 	changes_operational: number;
 	changes_knowledge: number;
+	/**
+	 * I10 soft-mode soak counter: touched writeable files that arrived
+	 * without a usable predicted_effect. Becomes near-zero by construction
+	 * once I10 flips hard (the drain rolls back instead), so the flip is
+	 * the counter's natural retirement.
+	 */
+	predicted_effect_missing: number;
 	files_touched: Record<string, number>;
 };
 

@@ -110,6 +110,7 @@ describe("evolution metrics", () => {
 			expect(stats.total_cost_usd).toBe(0);
 			expect(stats.changes_operational).toBe(0);
 			expect(stats.changes_knowledge).toBe(0);
+			expect(stats.predicted_effect_missing).toBe(0);
 			expect(stats.files_touched).toEqual({});
 		});
 

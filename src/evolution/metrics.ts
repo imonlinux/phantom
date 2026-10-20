@@ -152,8 +152,12 @@ function mergeStats(existing: ReflectionStats, delta: Partial<ReflectionStats>):
 			}
 			continue;
 		}
-		if (typeof value === "number" && typeof merged[key] === "number") {
-			(merged[key] as number) = (merged[key] as number) + value;
+		if (typeof value === "number") {
+			// Treat keys absent from the on-disk stats as 0, so counters added in
+			// later releases adopt cleanly into pre-existing metrics.json files
+			// instead of being dropped by the merge.
+			const current = typeof merged[key] === "number" ? (merged[key] as number) : 0;
+			(merged[key] as number) = current + value;
 		}
 	}
 	return merged;

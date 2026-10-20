@@ -133,6 +133,40 @@ describe("evolution metrics", () => {
 			expect(metrics.reflection_stats.files_touched["user-profile.md"]).toBe(1);
 		});
 
+		test("adopts new numeric keys absent from a pre-existing on-disk stats object", () => {
+			// Production upgrades merge deltas into stats files written by older
+			// releases. A pre-A1 file carries no changes_* or
+			// predicted_effect_missing keys; the merge must treat them as 0
+			// instead of silently dropping the delta.
+			writeFileSync(
+				`${TEST_DIR}/meta/metrics.json`,
+				JSON.stringify({
+					reflection_stats: {
+						drains: 10,
+						stage_haiku_runs: 10,
+						status_ok: 8,
+						total_cost_usd: 1.5,
+						files_touched: { "user-profile.md": 4 },
+					},
+				}),
+				"utf-8",
+			);
+			const config = testConfig();
+			recordReflectionRun(config, {
+				drains: 1,
+				status_ok: 1,
+				changes_operational: 2,
+				changes_knowledge: 1,
+				predicted_effect_missing: 3,
+			});
+			const metrics = JSON.parse(readFileSync(`${TEST_DIR}/meta/metrics.json`, "utf-8"));
+			expect(metrics.reflection_stats.drains).toBe(11);
+			expect(metrics.reflection_stats.changes_operational).toBe(2);
+			expect(metrics.reflection_stats.changes_knowledge).toBe(1);
+			expect(metrics.reflection_stats.predicted_effect_missing).toBe(3);
+			expect(metrics.reflection_stats.files_touched["user-profile.md"]).toBe(4);
+		});
+
 		test("recordReflectionRun accumulates across multiple drains", () => {
 			const config = testConfig();
 			recordReflectionRun(config, { drains: 1, stage_haiku_runs: 1, status_ok: 1, total_cost_usd: 0.001 });

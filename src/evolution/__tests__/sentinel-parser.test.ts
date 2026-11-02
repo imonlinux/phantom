@@ -116,4 +116,87 @@ describe("parseSentinel", () => {
 		expect(r?.changes?.[0].action).toBe("compact");
 		expect(r?.changes?.[0].predicted_effect).toBe("No behavior change; removes duplication.");
 	});
+
+	// --- Hardened failure classes (fix/sentinel-parse-hardening) ---------
+	// Each test reproduces a class proven to return null on the previous
+	// brace-blind scanner. Reflections routinely quote JSON and code, so
+	// these shapes are expected input, not corruption.
+
+	test("recovers from an unbalanced prose brace before the sentinel", () => {
+		const text =
+			"Consider the {json example shape below.\n\n" +
+			'{"status":"ok","changes":[{"file":"a.md","action":"edit","predicted_effect":"Cleaner intake."}]}';
+		expect(parseSentinel(text)?.status).toBe("ok");
+	});
+
+	test("recovers from several unbalanced prose braces", () => {
+		const text = "First { example and second { example.\n\n" + '{"status":"skip","reason":"nothing durable"}';
+		expect(parseSentinel(text)?.status).toBe("skip");
+	});
+
+	test("survives an unbalanced open brace inside a string value", () => {
+		const r = parseSentinel(
+			'{"status":"ok","changes":[{"file":"a.md","action":"edit",' +
+				'"predicted_effect":"Agent logs { when parsing fails and skips the entry.",' +
+				'"motivation":"agentic"}]}',
+		);
+		expect(r?.status).toBe("ok");
+		expect(r?.changes?.[0].predicted_effect).toContain("{");
+	});
+
+	test("survives an unbalanced close brace inside a string value", () => {
+		const r = parseSentinel(
+			'{"status":"ok","changes":[{"file":"a.md","action":"edit",' +
+				'"predicted_effect":"Agent avoids trailing } artifacts in output.",' +
+				'"motivation":"agentic"}]}',
+		);
+		expect(r?.status).toBe("ok");
+	});
+
+	test("survives a summary quoting an unclosed JSON snippet", () => {
+		const r = parseSentinel(
+			'{"status":"ok","changes":[{"file":"a.md","action":"edit",' +
+				'"summary":"removed the {\\"status\\": anchor example",' +
+				'"predicted_effect":"Cleaner file.",' +
+				'"motivation":"agentic"}]}',
+		);
+		expect(r?.status).toBe("ok");
+		expect(r?.changes?.[0].summary).toBe('removed the {"status": anchor example');
+	});
+
+	test("accepts a trailing comma after the changes array", () => {
+		const r = parseSentinel('{"status":"ok","changes":[{"file":"a.md","action":"edit"}],}');
+		expect(r?.status).toBe("ok");
+		expect(r?.changes).toHaveLength(1);
+	});
+
+	test("accepts a trailing comma inside the changes array", () => {
+		const r = parseSentinel('{"status":"ok","changes":[{"file":"a.md","action":"edit"},]}');
+		expect(r?.status).toBe("ok");
+		expect(r?.changes).toHaveLength(1);
+	});
+
+	test("parses a fenced json block", () => {
+		const r = parseSentinel('Did the work.\n\n```json\n{"status":"ok","changes":[]}\n```');
+		expect(r?.status).toBe("ok");
+	});
+
+	test("parses a fenced block surrounded by brace-heavy prose", () => {
+		const text =
+			'Use ```json {"a":1} ``` markers. Consider the {config below.\n\n' +
+			'```json\n{"status":"skip","reason":"routine session"}\n```';
+		expect(parseSentinel(text)?.status).toBe("skip");
+	});
+
+	test("last position still wins across candidate classes", () => {
+		// An early fenced example must not beat the later true sentinel.
+		const text =
+			'Example shape: ```json {"status":"skip","reason":"teaching echo"} ```\n\n' + '{"status":"ok","changes":[]}';
+		expect(parseSentinel(text)?.status).toBe("ok");
+	});
+
+	test("still rejects malformed JSON after all repair attempts", () => {
+		expect(parseSentinel("{status: invalid}")).toBeNull();
+		expect(parseSentinel('{"status":"ok", changes}')).toBeNull();
+	});
 });

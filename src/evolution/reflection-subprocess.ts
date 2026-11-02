@@ -262,6 +262,16 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 		const sentinel = parseSentinel(queryResult.responseText);
 		if (sentinel === null) {
 			stats.sentinel_parse_fail = (stats.sentinel_parse_fail ?? 0) + 1;
+			// Leave a bounded breadcrumb: before this log existed, a parse
+			// failure was a silent counter bump and the response text was
+			// unrecoverable. The sample is the model's own reflection output,
+			// capped at 400 chars.
+			console.warn(
+				`[evolution] sentinel parse failed drain=${drainId} tier=${tier} ` +
+					`chars=${queryResult.responseText.length} ` +
+					`hasStatusAnchor=${/\{\s*"status"\s*:/.test(queryResult.responseText)} ` +
+					`sample="${sentinelFailureSample(queryResult.responseText)}"`,
+			);
 		}
 		// Treat parse failure as status:"ok" with no annotation per failure
 		// mode case 9: graceful degradation. The invariant check runs either
@@ -473,38 +483,107 @@ function appendEvolutionLog(config: EvolutionConfig, entry: EvolutionLogEntry): 
  * object anywhere in the text and take the LAST one if there are several.
  * Returns null on failure so the caller can apply the Phase 3 failure mode
  * case 9 policy (graceful degradation to status:"ok").
+ *
+ * Extraction is hardened against the three observed failure classes, all of
+ * which come from reflections quoting JSON, config snippets, and code:
+ *  1. Braces inside JSON string values (an unbalanced one corrupts a naive
+ *     brace-depth scan and truncates the slice mid-string).
+ *  2. Unbalanced prose braces before the sentinel (the sentinel gets
+ *     absorbed into one giant unparseable slice). The scan is re-anchored
+ *     independently at every {"status": occurrence to recover from this.
+ *  3. Trailing commas (strict JSON.parse rejects what models emit anyway).
+ * Fenced ```json blocks are also candidates. Across all candidate classes
+ * the LAST position wins, matching the teaching prompt's contract that
+ * TypeScript parses the last JSON object in the message.
  */
 export function parseSentinel(text: string): SubprocessSentinel | null {
 	if (!text || text.trim().length === 0) return null;
-	// Find the last JSON-object-shaped substring. This is intentionally
-	// permissive: agents sometimes wrap the sentinel in prose or markdown.
-	const matches: Array<{ start: number; end: number }> = [];
+	const candidates: Array<{ start: number; body: string }> = [];
+
+	// Fenced blocks: strongest shape signal, but position-ordered like the rest.
+	const fenceRe = /```(?:json)?\s*\n?([\s\S]*?)```/g;
+	for (const m of text.matchAll(fenceRe)) {
+		if (m[1].includes("{")) candidates.push({ start: m.index ?? 0, body: m[1] });
+	}
+
+	// Balanced-object spans from a string-aware scan. Quotes only enter
+	// string state inside a candidate object; free-form prose quotes are
+	// ignored, so prose braces still form (harmless, non-JSON) spans of
+	// their own instead of corrupting the sentinel's span.
+	for (const span of collectStringAwareSpans(text, 0, text.length)) {
+		candidates.push({ start: span.start, body: text.slice(span.start, span.end) });
+	}
+
+	// Status-anchored rescans: each {"status": occurrence starts its own
+	// scan, so nothing in the prose before it can poison the slice.
+	const anchorRe = /\{\s*"status"\s*:/g;
+	for (const m of text.matchAll(anchorRe)) {
+		const anchor = m.index ?? 0;
+		const span = collectStringAwareSpans(text, anchor, text.length)[0];
+		if (span) candidates.push({ start: anchor, body: text.slice(span.start, span.end) });
+	}
+
+	candidates.sort((a, b) => b.start - a.start);
+	const seen = new Set<number>();
+	for (const c of candidates) {
+		if (seen.has(c.start)) continue;
+		seen.add(c.start);
+		const parsed = tryParseSentinelBody(c.body);
+		if (parsed) return parsed;
+	}
+	return null;
+}
+
+/** Balanced {..} spans between from and to, skipping braces inside double-quoted strings. */
+function collectStringAwareSpans(text: string, from: number, to: number): Array<{ start: number; end: number }> {
+	const spans: Array<{ start: number; end: number }> = [];
 	let depth = 0;
 	let start = -1;
-	for (let i = 0; i < text.length; i++) {
+	let inString = false;
+	let escaped = false;
+	for (let i = from; i < to; i++) {
 		const ch = text[i];
-		if (ch === "{") {
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === "\\") escaped = true;
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			if (depth > 0) inString = true;
+		} else if (ch === "{") {
 			if (depth === 0) start = i;
 			depth += 1;
 		} else if (ch === "}") {
-			depth -= 1;
-			if (depth === 0 && start >= 0) {
-				matches.push({ start, end: i + 1 });
-				start = -1;
+			if (depth > 0) {
+				depth -= 1;
+				if (depth === 0 && start >= 0) {
+					spans.push({ start, end: i + 1 });
+					start = -1;
+				}
 			}
-			if (depth < 0) depth = 0;
 		}
 	}
-	for (let i = matches.length - 1; i >= 0; i--) {
-		const slice = text.slice(matches[i].start, matches[i].end);
+	return spans;
+}
+
+/** JSON.parse with one trailing-comma repair retry, then the sentinel shape gate. */
+function tryParseSentinelBody(body: string): SubprocessSentinel | null {
+	const attempts = [body, body.replace(/,\s*([}\]])/g, "$1")];
+	for (const attempt of attempts) {
 		try {
-			const parsed: unknown = JSON.parse(slice);
+			const parsed: unknown = JSON.parse(attempt);
 			if (isSentinelShape(parsed)) return parsed;
 		} catch {
-			// try previous match
+			// fall through to the next attempt
 		}
 	}
 	return null;
+}
+
+/** Bounded single-line sample of a failed response for the parse-failure warn log. */
+export function sentinelFailureSample(text: string): string {
+	return text.replace(/\s+/g, " ").trim().slice(0, 400);
 }
 
 function isSentinelShape(value: unknown): value is SubprocessSentinel {

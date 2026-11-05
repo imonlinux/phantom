@@ -131,7 +131,7 @@ function writerRunner(bullet: string): QueryRunner {
 		const current = readFileSync(path, "utf-8");
 		writeFileSync(path, `${current}- ${bullet}\n`, "utf-8");
 		return {
-			responseText: `ok\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"${bullet}"}]}`,
+			responseText: `ok\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"${bullet}","predicted_effect":"Assistant cites the new preference in future replies."}]}`,
 			costUsd: 0.001,
 			inputTokens: 100,
 			outputTokens: 20,
@@ -301,7 +301,8 @@ describe("phase 1+2 integration", () => {
 			writeFileSync(`${TEST_DIR}/phantom-config/memory/corrections.md`, "# Corrections\n\n- valid\n", "utf-8");
 			// Also create a forbidden file under meta/ to trip I1.
 			return {
-				responseText: '{"status":"ok","changes":[{"file":"memory/corrections.md","action":"edit","summary":"ok"}]}',
+				responseText:
+					'{"status":"ok","changes":[{"file":"memory/corrections.md","action":"edit","summary":"ok","predicted_effect":"Assistant stops repeating the corrected mistake."}]}',
 				costUsd: 0.001,
 				inputTokens: 50,
 				outputTokens: 10,

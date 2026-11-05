@@ -272,11 +272,25 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 					`hasStatusAnchor=${/\{\s*"status"\s*:/.test(queryResult.responseText)} ` +
 					`sample="${sentinelFailureSample(queryResult.responseText)}"`,
 			);
+			// A1e: parse failure is a rollback, not the old case-9 graceful
+			// degradation to {status:"ok"}. The degraded path committed the
+			// drain with no annotations, and under I10-hard it would read
+			// every touched file as undeclared; rolling back here states the
+			// real cause instead of N synthetic I10 failures. Same routing as
+			// an invariant hard fail: snapshot restore, status "skip",
+			// incrementRetryOnFailure so a persistently malformed model
+			// poisons the row instead of retrying forever.
+			restoreSnapshot(input.config, snapshot);
+			baseResult.status = "skip";
+			baseResult.tier = tier;
+			baseResult.escalatedFromTier = escalatedFrom;
+			baseResult.error = "sentinel parse failed";
+			baseResult.incrementRetryOnFailure = true;
+			cleanupStaging(batchPath);
+			baseResult.durationMs = Date.now() - startedAt;
+			return baseResult;
 		}
-		// Treat parse failure as status:"ok" with no annotation per failure
-		// mode case 9: graceful degradation. The invariant check runs either
-		// way.
-		const effectiveSentinel: SubprocessSentinel = sentinel ?? { status: "ok" };
+		const effectiveSentinel: SubprocessSentinel = sentinel;
 
 		// Escalate path. Restore any partial writes and respawn at the
 		// target tier. One escalation per stage, capped at Opus.
@@ -322,12 +336,13 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 		if (invariant.softWarnings.length > 0) {
 			stats.invariant_warned_soft = (stats.invariant_warned_soft ?? 0) + invariant.softWarnings.length;
 		}
-		// I10 soak counter: how many touched files arrived without a usable
-		// predicted_effect. This is the number the A1e hard-flip decision
-		// reads after the soak window.
-		const i10Warnings = invariant.softWarnings.filter((w) => w.check === "I10").length;
-		if (i10Warnings > 0) {
-			stats.predicted_effect_missing = (stats.predicted_effect_missing ?? 0) + i10Warnings;
+		// I10 counter: touched files rejected for a missing or undersized
+		// predicted_effect. During the A1 soak this counted soft warnings;
+		// since the A1e flip these are hard failures and the drain is rolled
+		// back, so the counter now measures rejected files instead.
+		const i10Fails = invariant.hardFailures.filter((w) => w.check === "I10").length;
+		if (i10Fails > 0) {
+			stats.predicted_effect_missing = (stats.predicted_effect_missing ?? 0) + i10Fails;
 		}
 
 		if (!invariant.passed) {

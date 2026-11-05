@@ -101,7 +101,7 @@ function runnerThatWrites(text: string): QueryRunner {
 		const current = readFileSync(path, "utf-8");
 		writeFileSync(path, `${current}- ${text}\n`, "utf-8");
 		return {
-			responseText: `${text}\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"${text}"}]}`,
+			responseText: `${text}\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"${text}","predicted_effect":"Assistant cites the new preference in future replies."}]}`,
 			costUsd: 0.001,
 			inputTokens: 100,
 			outputTokens: 20,

@@ -119,10 +119,10 @@ describe("runInvariantCheck", () => {
 		expect(result.hardFailures.some((f) => f.check === "I4")).toBe(true);
 	});
 
-	describe("I10 predicted effects (soft during the A1 soak)", () => {
+	describe("I10 predicted effects (hard since A1e)", () => {
 		const EFFECT = "Agent cites the new provider instead of the removed one.";
 
-		test("positive: declared effects of sufficient length produce no I10 warnings", () => {
+		test("positive: declared effects of sufficient length produce no I10 failures", () => {
 			const pre = snap(BASELINE_FILES);
 			const post = snap({
 				...BASELINE_FILES,
@@ -137,11 +137,12 @@ describe("runInvariantCheck", () => {
 				],
 			};
 			const result = runInvariantCheck(pre, post, sentinel, emptyConfig());
+			expect(result.hardFailures.filter((w) => w.check === "I10")).toHaveLength(0);
 			expect(result.softWarnings.filter((w) => w.check === "I10")).toHaveLength(0);
 			expect(result.passed).toBe(true);
 		});
 
-		test("negative: missing or too-short effects warn per touched file, softly", () => {
+		test("negative: missing or too-short effects hard-fail per touched file", () => {
 			const pre = snap(BASELINE_FILES);
 			const post = snap({
 				...BASELINE_FILES,
@@ -156,8 +157,8 @@ describe("runInvariantCheck", () => {
 				],
 			};
 			const result = runInvariantCheck(pre, post, sentinel, emptyConfig());
-			expect(result.passed).toBe(true); // soft: never blocks the drain
-			const i10 = result.softWarnings.filter((w) => w.check === "I10");
+			expect(result.passed).toBe(false); // hard: blocks the drain
+			const i10 = result.hardFailures.filter((w) => w.check === "I10");
 			expect(i10).toHaveLength(2);
 			expect(i10.map((w) => w.file).sort()).toEqual(["domain-knowledge.md", "user-profile.md"]);
 		});
@@ -177,10 +178,11 @@ describe("runInvariantCheck", () => {
 				],
 			};
 			const result = runInvariantCheck(pre, post, sentinel, emptyConfig());
-			expect(result.softWarnings.filter((w) => w.check === "I10")).toHaveLength(0);
+			expect(result.hardFailures.filter((w) => w.check === "I10")).toHaveLength(0);
+			expect(result.passed).toBe(true);
 		});
 
-		test("undeclared touched file warns (the future I10-hard path)", () => {
+		test("undeclared touched file hard-fails (I8's undeclared half, enforced)", () => {
 			const pre = snap(BASELINE_FILES);
 			const post = snap({
 				...BASELINE_FILES,
@@ -191,34 +193,39 @@ describe("runInvariantCheck", () => {
 				changes: [{ file: "user-profile.md", action: "edit", predicted_effect: EFFECT }],
 			};
 			const result = runInvariantCheck(pre, post, sentinel, emptyConfig());
-			const i10 = result.softWarnings.filter((w) => w.check === "I10" && w.file === "memory/corrections.md");
+			const i10 = result.hardFailures.filter((w) => w.check === "I10" && w.file === "memory/corrections.md");
 			expect(i10).toHaveLength(1);
-			// I8's undeclared-file half still co-travels as today.
+			expect(result.passed).toBe(false);
+			// I8's undeclared-file half still co-travels as a soft warning.
 			expect(result.softWarnings.some((w) => w.check === "I8" && w.file === "memory/corrections.md")).toBe(true);
 		});
 
-		test("parse failure: degraded ok sentinel leaves every touched file without an effect", () => {
+		test("degraded ok sentinel (parse-failure shape) hard-fails every touched file", () => {
 			const pre = snap(BASELINE_FILES);
 			const post = snap({
 				...BASELINE_FILES,
 				"user-profile.md": `${BASELINE_FILES["user-profile.md"]}- prefers terse replies\n`,
 			});
-			// Upstream degrades a failed parse to {status:"ok"} with no changes.
+			// The old parse-failure degradation produced {status:"ok"} with no
+			// changes. Reflection-subprocess now rolls back before this check
+			// runs, but the shape stays a hard fail for direct callers.
 			const degraded = { status: "ok" } as SubprocessSentinel;
 			const result = runInvariantCheck(pre, post, degraded, emptyConfig());
-			const i10 = result.softWarnings.filter((w) => w.check === "I10");
+			const i10 = result.hardFailures.filter((w) => w.check === "I10");
 			expect(i10).toHaveLength(1);
 			expect(i10[0].file).toBe("user-profile.md");
-			// A null sentinel (no data at all) skips I10 rather than warning.
+			// A null sentinel (no data at all) skips I10 rather than failing;
+			// that path is the subprocess's parse-failure rollback, which
+			// never reaches this function.
 			const nullResult = runInvariantCheck(pre, post, null, emptyConfig());
-			expect(nullResult.softWarnings.filter((w) => w.check === "I10")).toHaveLength(0);
+			expect(nullResult.hardFailures.filter((w) => w.check === "I10")).toHaveLength(0);
 		});
 
 		test("out-of-scope and constitution changes are I1/I2's job, not I10's", () => {
 			const pre = snap(BASELINE_FILES);
 			const post = snap({ ...BASELINE_FILES, "constitution.md": "1. Honesty\n2. Safety\n3. Mischief\n" });
 			const result = runInvariantCheck(pre, post, null, emptyConfig());
-			expect(result.softWarnings.filter((w) => w.check === "I10")).toHaveLength(0);
+			expect(result.hardFailures.filter((w) => w.check === "I10")).toHaveLength(0);
 			expect(result.hardFailures.some((f) => f.check === "I2")).toBe(true);
 		});
 

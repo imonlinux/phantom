@@ -337,7 +337,7 @@ export function runInvariantCheck(
 		}
 	}
 
-	// --- I10. Predicted effects (soft during the A1 soak) ----------------
+	// --- I10. Predicted effects (hard since A1e) -------------------------
 	// Every touched writeable file must carry a declared change with a
 	// non-empty predicted_effect of at least MIN_PREDICTED_EFFECT_CHARS.
 	// Presence and length only: quality judgment is the A2 contrast judge's
@@ -345,11 +345,12 @@ export function runInvariantCheck(
 	// change satisfies the rule with the stock phrase "no behavior change;
 	// removes duplication" exactly like any other string of sufficient
 	// length; the exemption is semantic (teaching prompt, A2), not a code
-	// path here. Sentinel parse failure degrades the sentinel to
-	// {status:"ok"} upstream, so every touched file arrives undeclared and
-	// lands here: precisely the signal the predicted_effect_missing counter
-	// exists to surface. Scope violations are I1's job and constitution
-	// changes are I2's, so both are skipped below.
+	// path here. A failure here rolls the drain back like any other
+	// invariant fail. Sentinel parse failure never reaches this check:
+	// reflection-subprocess rolls the drain back before the snapshot
+	// comparison runs, so the degraded {status:"ok"} shape below is only
+	// reachable from direct callers of this function. Scope violations are
+	// I1's job and constitution changes are I2's, so both are skipped below.
 	if (sentinel !== null) {
 		const declaredEffects = new Map<string, string | undefined>();
 		for (const c of sentinel.changes ?? []) {
@@ -359,7 +360,7 @@ export function runInvariantCheck(
 			if (!isWriteableFile(rel)) continue;
 			const effect = declaredEffects.get(rel);
 			if (typeof effect !== "string" || effect.trim().length < INVARIANT_BOUNDS.MIN_PREDICTED_EFFECT_CHARS) {
-				softWarnings.push({
+				hardFailures.push({
 					check: "I10",
 					file: rel,
 					message: `${rel} changed without a usable predicted_effect (needs >= ${INVARIANT_BOUNDS.MIN_PREDICTED_EFFECT_CHARS} chars)`,

@@ -107,10 +107,15 @@ src/
     embeddings.ts       # Ollama embedding client
     consolidation.ts    # Session-end memory extraction
   evolution/
-    engine.ts           # 6-step self-evolution orchestrator
-    reflection.ts       # Post-session observation extraction
-    validation.ts       # 5-gate validation (constitution, regression, size, drift, safety)
-    versioning.ts       # Git-like config versioning with rollback
+    engine.ts           # Self-evolution orchestrator (gate, queue, cadence wiring)
+    gate.ts             # Step 1: Haiku fire/skip decision per session
+    queue.ts            # Step 2: persistent SQLite queue with bounded retries
+    cadence.ts          # Step 3: serialized drains (cron + demand trigger)
+    batch-processor.ts  # Drain batching and disposition routing
+    reflection-subprocess.ts # Step 4: Agent SDK subprocess learns and writes
+    invariant-check.ts  # Step 5: deterministic post-write validation
+    contrast-judge.ts   # Flag-gated evidence check on predicted effects
+    versioning.ts       # Snapshots, versions, rollback
     judge-models.ts     # Sonnet is the default judge; Opus is opt-in
   mcp/
     server.ts           # MCP Streamable HTTP server
@@ -156,7 +161,7 @@ docs/                   # Documentation (architecture, channels, mcp, security, 
 
 Message flow: Slack message -> SlackChannel adapter -> ChannelRouter -> SessionManager (find/create session) -> PromptAssembler (base + role + evolved config + memory context) -> AgentRuntime.query() (Opus 4.7 with full tools) -> response -> ChannelRouter -> Slack thread reply. Web chat uses the same flow: POST /chat/sessions/:id/message -> SSE stream of wire frames -> React client renders in real time. Two separate transcripts (wire-format message store for the client, SDK conversation for the agent) are kept in sync.
 
-After each session: EvolutionEngine runs 6-step reflection pipeline -> 5-gate validation -> approved changes applied to phantom-config/ -> version bumped.
+After each session: a Haiku gate decides fire or skip, rows queue in SQLite, and the cadence drains the queue into a reflection subprocess (Agent SDK) that rewrites phantom-config/ under a deterministic invariant check: commit and bump the version on pass, restore the snapshot on fail. An optional contrast judge (off by default) can vet each change's declared predicted effect against the real diff.
 
 MCP flow: External client -> /mcp endpoint -> bearer auth -> MCP Server -> tool execution (some route through AgentRuntime for full Opus brain).
 
@@ -286,6 +291,6 @@ Verify after every deploy with `docker exec phantom sh -c 'touch /app/public/_w 
 - [Nextcloud Talk Setup](docs/nextcloud-talk-setup.md) - Bot install, Talk 24 threads, HMAC troubleshooting
 - [MCP](docs/mcp.md) - Connecting external clients to the MCP server
 - [Memory](docs/memory.md) - Three-tier vector memory architecture
-- [Self-Evolution](docs/self-evolution.md) - The 6-step reflection pipeline
+- [Self-Evolution](docs/self-evolution.md) - The reflection pipeline: gate, queue, cadence, subprocess, invariants
 - [Security](docs/security.md) - Auth, secrets, permissions, and hardening
 - [Roles](docs/roles.md) - Customizing the agent's specialization

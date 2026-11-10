@@ -1,9 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentRuntime } from "../agent/runtime.ts";
 import { getThinkingConfig } from "../agent/thinking-config.ts";
 import { buildProviderEnv } from "../config/providers.ts";
 import type { PhantomConfig } from "../config/types.ts";
+import { loadContrastJudgeConfig } from "./contrast-config.ts";
+import { runContrastJudge } from "./contrast-judge.ts";
 import type { EvolutionConfig } from "./config.ts";
 import { runInvariantCheck } from "./invariant-check.ts";
 import { JUDGE_MODEL_HAIKU, JUDGE_MODEL_OPUS, JUDGE_MODEL_SONNET } from "./judge-models.ts";
@@ -94,6 +97,12 @@ export type ReflectionSubprocessInput = {
 	batch: QueuedSession[];
 	config: EvolutionConfig;
 	phantomConfig: PhantomConfig | null;
+	/**
+	 * Runtime the contrast judge calls through. The batch processor and the
+	 * engine pass the live runtime; tests pass null or an override. Optional
+	 * so existing callers stay source-compatible.
+	 */
+	runtime?: AgentRuntime | null;
 };
 
 /**
@@ -382,6 +391,47 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 			baseResult.escalatedFromTier = escalatedFrom;
 			baseResult.durationMs = Date.now() - startedAt;
 			return baseResult;
+		}
+
+		// A2: contrast judge. One call after the invariants pass and before
+		// the version commits. The judge sees the real pre/post diffs plus
+		// the batch evidence and answers per change whether the declared
+		// predicted_effect plausibly follows. Judge failure is fail-open: a
+		// judge that times out or errors must never discard learning signal.
+		const contrastCfg = loadContrastJudgeConfig(input.config);
+		if (contrastCfg.mode !== "off") {
+			stats.contrast_runs = (stats.contrast_runs ?? 0) + 1;
+			const verdict = await runContrastJudge({
+				runtime: input.runtime ?? null,
+				model: contrastCfg.model,
+				changes,
+				before: snapshot,
+				after: postSnapshot,
+				batch: input.batch,
+			});
+			if (verdict.outcome === "error") {
+				stats.contrast_errors = (stats.contrast_errors ?? 0) + 1;
+				console.warn(`[evolution] contrast judge failed drain=${drainId} (fail-open, committing): ${verdict.error}`);
+			} else if (verdict.rejected) {
+				stats.contrast_rejected = (stats.contrast_rejected ?? 0) + 1;
+				appendEvolutionLog(input.config, {
+					timestamp: new Date().toISOString(),
+					// Rejections produce no version of their own: the entry pins
+					// the pre-drain version so the timeline shows the drain was
+					// declined between version N and N+1.
+					version: snapshot.version.version,
+					drain_id: drainId,
+					session_ids: sessionIds,
+					tier,
+					status: "rejected",
+					changes_applied: 0,
+					details: changes,
+					contrast: { mode: contrastCfg.mode, rejected: true, verdicts: verdict.verdicts },
+				});
+				// Shadow-first wiring: both modes log the rejection above and
+				// fall through to commit. The enforce-mode rollback branch is
+				// the A2d commit.
+			}
 		}
 
 		const nextVersion = createNextVersion(snapshot.version, changes, snapshot.version.metrics_at_change);

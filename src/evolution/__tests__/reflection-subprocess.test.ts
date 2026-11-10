@@ -8,6 +8,7 @@ import {
 	parseSentinel,
 	runReflectionSubprocess,
 } from "../reflection-subprocess.ts";
+import { __setContrastJudgeForTest } from "../contrast-judge.ts";
 import type { SessionSummary } from "../types.ts";
 
 // Phase 3 reflection subprocess failure mode coverage plus one success path.
@@ -440,5 +441,112 @@ describe("runReflectionSubprocess failure modes", () => {
 			const entries = readdirSync(`${TEST_DIR}/.staging`);
 			expect(entries).toHaveLength(0);
 		}
+	});
+});
+
+describe("contrast judge wiring", () => {
+	let config: EvolutionConfig;
+
+	// Shared runner: writes one bullet and returns an ok sentinel that names
+	// the change, mirroring the success-path fixture above.
+	const okRunner: QueryRunner = async () => {
+		const current = readFileSync(`${TEST_DIR}/user-profile.md`, "utf-8");
+		writeFileSync(`${TEST_DIR}/user-profile.md`, `${current}- new preference learned\n`, "utf-8");
+		return {
+			responseText:
+				'Added one new bullet about preferences.\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"preference","predicted_effect":"Assistant cites the new preference in future replies."}]}',
+			costUsd: 0.001,
+			inputTokens: 200,
+			outputTokens: 40,
+			timedOut: false,
+			sigkilled: false,
+			error: null,
+		};
+	};
+
+	function enableShadow(): void {
+		writeFileSync(`${TEST_DIR}/meta/evolution.json`, JSON.stringify({ contrast_judge: "shadow" }), "utf-8");
+	}
+
+	function readLog(): Array<Record<string, unknown>> {
+		return readFileSync(`${TEST_DIR}/meta/evolution-log.jsonl`, "utf-8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+	}
+
+	beforeEach(() => {
+		config = setupEnv();
+	});
+
+	afterEach(() => {
+		__setReflectionRunnerForTest(null);
+		__setContrastJudgeForTest(null);
+		rmSync(TEST_DIR, { recursive: true, force: true });
+	});
+
+	test("shadow: a rejected drain still commits, with rejected + ok log entries", async () => {
+		enableShadow();
+		__setReflectionRunnerForTest(okRunner);
+		__setContrastJudgeForTest(async () => ({
+			outcome: "ok",
+			rejected: true,
+			verdicts: [{ file: "user-profile.md", plausible: false, reason: "diff says nothing about preferences" }],
+		}));
+		const result = await runReflectionSubprocess({ batch: [makeQueued()], config, phantomConfig: null });
+		// Shadow mode observes; it never blocks the commit.
+		expect(result.status).toBe("ok");
+		expect(result.version).toBe(1);
+		expect(result.statsDelta.contrast_runs).toBe(1);
+		expect(result.statsDelta.contrast_rejected).toBe(1);
+		expect(result.statsDelta.contrast_errors).toBeUndefined();
+
+		const log = readLog();
+		expect(log).toHaveLength(2);
+		const rejected = log[0] as Record<string, unknown>;
+		expect(rejected.status).toBe("rejected");
+		expect(rejected.version).toBe(0);
+		expect(rejected.changes_applied).toBe(0);
+		const contrast = rejected.contrast as Record<string, unknown>;
+		expect(contrast.mode).toBe("shadow");
+		expect(contrast.rejected).toBe(true);
+		const verdicts = contrast.verdicts as Array<Record<string, unknown>>;
+		expect(verdicts[0].file).toBe("user-profile.md");
+		expect(verdicts[0].plausible).toBe(false);
+		// The committed entry lands after the rejection, at version 1.
+		const committed = log[1] as Record<string, unknown>;
+		expect(committed.status).toBe("ok");
+		expect(committed.version).toBe(1);
+	});
+
+	test("off: the judge is never invoked and the drain commits normally", async () => {
+		__setReflectionRunnerForTest(okRunner);
+		let judgeCalled = false;
+		__setContrastJudgeForTest(async () => {
+			judgeCalled = true;
+			return { outcome: "ok", rejected: false, verdicts: [] };
+		});
+		const result = await runReflectionSubprocess({ batch: [makeQueued()], config, phantomConfig: null });
+		expect(result.status).toBe("ok");
+		expect(judgeCalled).toBe(false);
+		expect(result.statsDelta.contrast_runs).toBeUndefined();
+		const log = readLog();
+		expect(log).toHaveLength(1);
+	});
+
+	test("judge error fails open: commit proceeds, error counter bumps", async () => {
+		enableShadow();
+		__setReflectionRunnerForTest(okRunner);
+		__setContrastJudgeForTest(async () => ({ outcome: "error", error: "judge unavailable" }));
+		const result = await runReflectionSubprocess({ batch: [makeQueued()], config, phantomConfig: null });
+		expect(result.status).toBe("ok");
+		expect(result.version).toBe(1);
+		expect(result.statsDelta.contrast_runs).toBe(1);
+		expect(result.statsDelta.contrast_errors).toBe(1);
+		expect(result.statsDelta.contrast_rejected).toBeUndefined();
+		// Only the commit entry: the failed judge wrote no log line.
+		const log = readLog();
+		expect(log).toHaveLength(1);
+		expect(log[0].status).toBe("ok");
 	});
 });

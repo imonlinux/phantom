@@ -82,9 +82,22 @@ export type EvolutionLogEntry = {
 	drain_id: string;
 	session_ids: string[];
 	tier: ReflectionTier | "skip";
-	status: SubprocessStatus;
+	/**
+	 * "rejected" marks a drain the A2 contrast judge declined; it produced no
+	 * version of its own (the entry reuses the pre-drain version number).
+	 */
+	status: SubprocessStatus | "rejected";
 	changes_applied: number;
 	details: VersionChange[];
+	/** Present when the contrast judge ran on this drain (shadow or enforce). */
+	contrast?: ContrastVerdictSummary;
+};
+
+/** Per-change contrast judge verdicts recorded on evolution-log entries. */
+export type ContrastVerdictSummary = {
+	mode: "shadow" | "enforce";
+	rejected: boolean;
+	verdicts: Array<{ file: string; plausible: boolean; reason: string }>;
 };
 
 export type EvolvedConfig = {
@@ -196,6 +209,15 @@ export type ReflectionStats = {
 	 * the counter's natural retirement.
 	 */
 	predicted_effect_missing: number;
+	/**
+	 * A2 contrast judge counters. runs counts every judge call; rejected
+	 * counts judge rejections in both modes (in shadow that is the would-be
+	 * kill rate the enforce decision reads); errors counts fail-open judge
+	 * failures (timeout, parse, uncovered changes, no runtime).
+	 */
+	contrast_runs: number;
+	contrast_rejected: number;
+	contrast_errors: number;
 	files_touched: Record<string, number>;
 };
 

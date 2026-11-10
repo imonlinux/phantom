@@ -181,6 +181,7 @@ export class EvolutionEngine {
 			batch,
 			config: this.config,
 			phantomConfig: this.runtime ? this.runtime.getPhantomConfig() : null,
+			runtime: this.runtime,
 		});
 
 		recordReflectionRun(this.config, result.statsDelta);
@@ -286,6 +287,7 @@ export class EvolutionEngine {
 			batch: [queued],
 			config: this.config,
 			phantomConfig: this.runtime ? this.runtime.getPhantomConfig() : null,
+			runtime: this.runtime,
 		});
 
 		recordReflectionRun(this.config, result.statsDelta);

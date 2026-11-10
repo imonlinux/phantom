@@ -114,6 +114,9 @@ export function emptyReflectionStats(): ReflectionStats {
 		changes_operational: 0,
 		changes_knowledge: 0,
 		predicted_effect_missing: 0,
+		contrast_runs: 0,
+		contrast_rejected: 0,
+		contrast_errors: 0,
 		files_touched: {},
 	};
 }

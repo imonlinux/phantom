@@ -130,6 +130,7 @@ export function migrateOldLogEntry(raw: unknown): EvolutionLogEntry | null {
 	const status = normaliseStatus(obj.status);
 	const details = normaliseDetails(obj.details, sessionIds);
 	const changesApplied = typeof obj.changes_applied === "number" ? obj.changes_applied : details.length;
+	const contrast = normaliseContrast(obj.contrast);
 
 	return {
 		timestamp,
@@ -140,7 +141,24 @@ export function migrateOldLogEntry(raw: unknown): EvolutionLogEntry | null {
 		status,
 		changes_applied: changesApplied,
 		details,
+		...(contrast ? { contrast } : {}),
 	};
+}
+
+/** Carry A2 contrast verdicts through the log migration instead of dropping them. */
+function normaliseContrast(value: unknown): EvolutionLogEntry["contrast"] {
+	if (!value || typeof value !== "object") return undefined;
+	const v = value as Record<string, unknown>;
+	if (v.mode !== "shadow" && v.mode !== "enforce") return undefined;
+	if (typeof v.rejected !== "boolean" || !Array.isArray(v.verdicts)) return undefined;
+	const verdicts: Array<{ file: string; plausible: boolean; reason: string }> = [];
+	for (const item of v.verdicts) {
+		if (!item || typeof item !== "object") continue;
+		const t = item as Record<string, unknown>;
+		if (typeof t.file !== "string" || typeof t.plausible !== "boolean" || typeof t.reason !== "string") continue;
+		verdicts.push({ file: t.file, plausible: t.plausible, reason: t.reason });
+	}
+	return { mode: v.mode, rejected: v.rejected, verdicts };
 }
 
 function normaliseTier(value: unknown): ReflectionTier | "skip" {
@@ -150,8 +168,8 @@ function normaliseTier(value: unknown): ReflectionTier | "skip" {
 	return "skip";
 }
 
-function normaliseStatus(value: unknown): SubprocessStatus {
-	if (value === "ok" || value === "skip" || value === "escalate") return value;
+function normaliseStatus(value: unknown): SubprocessStatus | "rejected" {
+	if (value === "ok" || value === "skip" || value === "escalate" || value === "rejected") return value;
 	// Old-shape rows have no status. They were always applied (otherwise
 	// they would not be in the log), so map missing/unknown to "ok".
 	return "ok";

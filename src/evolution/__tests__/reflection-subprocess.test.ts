@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { __setContrastJudgeForTest } from "../contrast-judge.ts";
 import type { EvolutionConfig } from "../config.ts";
-import type { QueuedSession } from "../queue.ts";
+import { type QueuedSession } from "../queue.ts";
 import {
 	type QueryRunner,
 	__setReflectionRunnerForTest,
 	parseSentinel,
 	runReflectionSubprocess,
 } from "../reflection-subprocess.ts";
-import { __setContrastJudgeForTest } from "../contrast-judge.ts";
 import type { SessionSummary } from "../types.ts";
 
 // Phase 3 reflection subprocess failure mode coverage plus one success path.
@@ -549,4 +549,51 @@ describe("contrast judge wiring", () => {
 		expect(log).toHaveLength(1);
 		expect(log[0].status).toBe("ok");
 	});
+
+	test("enforce: rejection rolls back the drain and routes as a clean skip", async () => {
+		writeFileSync(`${TEST_DIR}/meta/evolution.json`, JSON.stringify({ contrast_judge: "enforce" }), "utf-8");
+		__setReflectionRunnerForTest(okRunner);
+		__setContrastJudgeForTest(async () => ({
+			outcome: "ok",
+			rejected: true,
+			verdicts: [{ file: "user-profile.md", plausible: false, reason: "diff says nothing about preferences" }],
+		}));
+		const result = await runReflectionSubprocess({ batch: [makeQueued()], config, phantomConfig: null });
+		expect(result.status).toBe("skip");
+		expect(result.version).toBe(0);
+		expect(result.error).toBeNull();
+		expect(result.incrementRetryOnFailure).toBe(false);
+		expect(result.invariantHardFailures).toHaveLength(0);
+		expect(result.statsDelta.contrast_rejected).toBe(1);
+		expect(result.statsDelta.status_skip).toBe(1);
+		// The write was rolled back and the version never bumped.
+		const userProfile = readFileSync(`${TEST_DIR}/user-profile.md`, "utf-8");
+		expect(userProfile).not.toContain("new preference learned");
+		const version = JSON.parse(readFileSync(`${TEST_DIR}/meta/version.json`, "utf-8"));
+		expect(version.version).toBe(0);
+		// Exactly one log entry: the rejection.
+		const log = readLog();
+		expect(log).toHaveLength(1);
+		expect(log[0].status).toBe("rejected");
+	});
+
+	test("enforce: a plausible verdict commits normally", async () => {
+		writeFileSync(`${TEST_DIR}/meta/evolution.json`, JSON.stringify({ contrast_judge: "enforce" }), "utf-8");
+		__setReflectionRunnerForTest(okRunner);
+		__setContrastJudgeForTest(async () => ({
+			outcome: "ok",
+			rejected: false,
+			verdicts: [{ file: "user-profile.md", plausible: true, reason: "diff adds the preference" }],
+		}));
+		const result = await runReflectionSubprocess({ batch: [makeQueued()], config, phantomConfig: null });
+		expect(result.status).toBe("ok");
+		expect(result.version).toBe(1);
+		const log = readLog();
+		expect(log).toHaveLength(1);
+		expect(log[0].status).toBe("ok");
+	});
+
+	// The queue-routing end to end (enforce rejection -> disposition skip ->
+	// markProcessed deletes the rows) lives in cadence.test.ts, where the
+	// real EvolutionCadence owns the disposition switch.
 });

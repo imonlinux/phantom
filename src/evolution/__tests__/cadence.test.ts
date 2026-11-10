@@ -9,7 +9,8 @@ import { EvolutionEngine } from "../engine.ts";
 import type { GateDecision } from "../gate-types.ts";
 import type { QueuedSession } from "../queue.ts";
 import { EvolutionQueue } from "../queue.ts";
-import { type QueryRunner, __setReflectionRunnerForTest } from "../reflection-subprocess.ts";
+import { type QueryRunner, __setReflectionRunnerForTest, runReflectionSubprocess } from "../reflection-subprocess.ts";
+import { __setContrastJudgeForTest } from "../contrast-judge.ts";
 import type { ReflectionSubprocessResult, SessionSummary } from "../types.ts";
 
 // Phase 3 cadence + batch processor tests. The batch processor now runs the
@@ -423,6 +424,65 @@ describe("EvolutionCadence", () => {
 			expect(remaining[0].retry_count).toBe(1);
 		} finally {
 			cadence.stop();
+		}
+	});
+
+	test("contrast judge enforce rejection clears the queue as processed, not failed", async () => {
+		// Full config tree: the real subprocess snapshots, writes, and rolls
+		// these files back.
+		writeRealEngineFixture("never");
+		const config = setupEnv();
+		writeFileSync(
+			`${TEST_DIR}/phantom-config/meta/evolution.json`,
+			JSON.stringify({ contrast_judge: "enforce" }),
+			"utf-8",
+		);
+		const runner: QueryRunner = async () => {
+			const current = readFileSync(`${TEST_DIR}/phantom-config/user-profile.md`, "utf-8");
+			writeFileSync(`${TEST_DIR}/phantom-config/user-profile.md`, `${current}- new preference learned\n`, "utf-8");
+			return {
+				responseText:
+					'Added one new bullet.\n{"status":"ok","changes":[{"file":"user-profile.md","action":"edit","summary":"preference","predicted_effect":"Assistant cites the new preference in future replies."}]}',
+				costUsd: 0.001,
+				inputTokens: 200,
+				outputTokens: 40,
+				timedOut: false,
+				sigkilled: false,
+				error: null,
+			};
+		};
+		__setReflectionRunnerForTest(runner);
+		__setContrastJudgeForTest(async () => ({
+			outcome: "ok",
+			rejected: true,
+			verdicts: [{ file: "user-profile.md", plausible: false, reason: "no basis in the diff" }],
+		}));
+		const db = newDb();
+		const queue = new EvolutionQueue(db);
+		const engine = fakeEngine({
+			onDrain: async (batch) => runReflectionSubprocess({ batch, config, phantomConfig: null }),
+		});
+		const cadence = new EvolutionCadence(engine, queue, config, { cadenceMinutes: 1_000_000, demandTriggerDepth: 999 });
+		cadence.start();
+		try {
+			queue.enqueue(makeSummary({ session_id: "rejected-1", session_key: "slack:C1:T1" }), DECISION);
+			const result = await cadence.triggerNow();
+			expect(result?.processed).toBe(1);
+			expect(result?.results[0]?.disposition).toBe("skip");
+			// markProcessed deleted the row. Routing the rejection to
+			// markFailed instead would retry an unchanged batch forever.
+			expect(queue.depth()).toBe(0);
+			// The rollback put the tree back to the fixture state.
+			expect(readFileSync(`${TEST_DIR}/phantom-config/user-profile.md`, "utf-8")).not.toContain(
+				"new preference learned",
+			);
+			const version = JSON.parse(readFileSync(`${TEST_DIR}/phantom-config/meta/version.json`, "utf-8"));
+			expect(version.version).toBe(0);
+		} finally {
+			cadence.stop();
+			__setReflectionRunnerForTest(null);
+			__setContrastJudgeForTest(null);
+			db.close();
 		}
 	});
 

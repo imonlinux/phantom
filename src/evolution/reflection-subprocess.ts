@@ -428,9 +428,22 @@ export async function runReflectionSubprocess(input: ReflectionSubprocessInput):
 					details: changes,
 					contrast: { mode: contrastCfg.mode, rejected: true, verdicts: verdict.verdicts },
 				});
-				// Shadow-first wiring: both modes log the rejection above and
-				// fall through to commit. The enforce-mode rollback branch is
-				// the A2d commit.
+				if (contrastCfg.mode === "enforce") {
+					// Enforce rejection: roll back to the snapshot exactly like
+					// an invariant hard fail, then route as a clean skip. The
+					// rows must not retry: the batch is unchanged, so a retry
+					// would re-reject forever and poison the queue.
+					restoreSnapshot(input.config, snapshot);
+					stats.status_skip = (stats.status_skip ?? 0) + 1;
+					cleanupStaging(batchPath);
+					baseResult.status = "skip";
+					baseResult.tier = tier;
+					baseResult.escalatedFromTier = escalatedFrom;
+					baseResult.error = null;
+					baseResult.incrementRetryOnFailure = false;
+					baseResult.durationMs = Date.now() - startedAt;
+					return baseResult;
+				}
 			}
 		}
 

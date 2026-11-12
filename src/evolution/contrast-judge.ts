@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { QueuedSession } from "./queue.ts";
 import type { VersionChange } from "./types.ts";
